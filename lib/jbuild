@@ -1,0 +1,7 @@
+(jbuild_version 1)
+
+(library
+ ((name            hnsw)
+  (public_name     hnsw)
+  (libraries       (base))
+  (preprocess (pps (ppx_jane)))))
