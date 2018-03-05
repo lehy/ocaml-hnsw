@@ -30,6 +30,7 @@ module Hgraph(Distance : DISTANCE) = struct
         let new_visited = Set.add visited node in
         if phys_equal new_visited visited then Already_visited
         else New_visit new_visited
+      let mem visited node = Set.mem visited node
     end
 
     module Neighbours = struct
@@ -203,12 +204,15 @@ module Hgraph(Distance : DISTANCE) = struct
   let allocate_node h =
     h.next_available_node, { h with next_available_node = h.next_available_node+1 }
 
+  let allocate h value =
+    let node, h = allocate_node h in
+    { h with values = Map.set h.values node value }, node
+  
   let invariant h =
     Map.for_all h.layers ~f:LayerGraph.invariant
 
   let insert h i_layer value neighbours =
-    let node, h = allocate_node h in
-    let h = { h with values = Map.set h.values node value } in
+    let h, node = allocate h value in
     assert (invariant h);
     assert (Map.mem h.values node);
     let layer = layer h i_layer in
@@ -244,7 +248,7 @@ module Nearest(Distance : DISTANCE) = struct
   module MaxHeap = Hnsw.MaxHeap(Distance)(Hgraph)
 
   (* type graph = t [@@deriving sexp] *)
-  type t = { value_computer : t_value_computer;
+  type t = { value_computer : t_value_computer sexp_opaque;
              target : value;
              size : int;
              max_size : int;
@@ -276,9 +280,11 @@ module VisitMe(Distance : DISTANCE) = struct
   module Hgraph = Hgraph(Distance)
   module Nearest = Nearest(Distance)
   module MinHeap = Hnsw.MinHeap(Distance)(Hgraph)
-  type t_value_computer = Hgraph.t
-  type value = Hgraph.value
-  type t = { target : value; value_computer : t_value_computer; heap : MinHeap.t }
+  type t_value_computer = Hgraph.t [@@deriving sexp]
+  type value = Hgraph.value [@@deriving sexp]
+  type t = { target : value;
+             value_computer : t_value_computer sexp_opaque;
+             heap : MinHeap.t } [@@deriving sexp]
   type node = Hgraph.node
   type nearest = Nearest.t
   
@@ -385,6 +391,10 @@ let test_graphical () =
         (Sexp.to_string_hum @@ [%sexp_of : Knn.MinHeap.Element.t list] neighbours);
       show_neighbours hgraph point neighbours (Printf.sprintf "neighbours_%03d.svg" !i);
       Int.incr i);;
-
+(*  TODO:
+- print to dot
+- write simple (expect?) tests
+- run on benchmark
+*)
 
 test_graphical ();;
