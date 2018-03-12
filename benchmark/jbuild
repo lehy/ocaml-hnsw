@@ -1,0 +1,11 @@
+(jbuild_version 1)
+
+(executable
+ ((name            benchmark)
+  (libraries       (hnsw base stdio hdf5_caml))
+  (preprocess (pps (ppx_jane)))))
+
+(alias
+ ((name    runtest)
+  (deps    (benchmark.exe))
+  (action  (run ${<}))))

@@ -3,5 +3,5 @@
 (library
  ((name            hnsw)
   (public_name     hnsw)
-  (libraries       (base))
+  (libraries       (base lacaml))
   (preprocess (pps (ppx_jane)))))

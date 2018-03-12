@@ -1,561 +1,422 @@
 open Base
-(* open Stdio (\*  DEBUG  *\) *)
-(*  https://arxiv.org/abs/1603.09320  *)
 
-(* 
-   I cannot find a priority queue or heap in Base.
-   Core_kernel has FHeap and Heap which look like they might work.
-
-   A pairing heap looks fun to implement.
- *)
-module type COMPARABLE = sig
-  type t [@@deriving sexp]
-  val compare : t -> t -> int
-end
-module PairingHeap(Element : COMPARABLE) = struct
-  (* Functional min heap.  *)
-  type t =
-    | Empty
-    | Node of { node : Element.t; subheaps : t list } [@@deriving sexp]
-
-  let create () = Empty
-  let singleton x = Node { node = x; subheaps = [] }
-  let merge (a : t) (b : t) = match a, b with
-    | Empty, _ -> b
-    | _, Empty -> a
-    | Node { node=node_a; subheaps=subheaps_a },
-      Node { node=node_b; subheaps=subheaps_b } ->
-      if Element.compare node_a node_b < 0 then Node { node=node_a; subheaps=b::subheaps_a }
-      else Node { node=node_b; subheaps=a::subheaps_b }
-  let add h x = merge h (singleton x)
-  let top = function
-    | Empty -> None
-    | Node { node; _ } -> Some node
-
-  let rec merge_pairs = function
-    | [] -> Empty
-    | [h] -> h
-    | h1::h2::q ->
-      merge (merge h1 h2) (merge_pairs q)
-
-  let remove_top = function
-    | Empty -> Empty
-    | Node { node; subheaps } -> merge_pairs subheaps
-
-  let pop_top = function
-    | Empty -> None
-    | Node { node; subheaps } -> Some (node, merge_pairs subheaps)
-
-  (*  order unspecified  *)
-  let rec fold h ~init ~f = match h with
-    | Empty -> init
-    | Node { node; subheaps } ->
-      List.fold_left subheaps ~init:(f init node) ~f:(fun acc h -> fold h ~init:acc ~f)
-
-  type 'a continue =
-    | Stop of 'a
-    | Continue of 'a
-  let rec fold_near_to_far_until h ~init ~f = match h with
-    | Empty -> init
-    | Node { node; subheaps } ->
-      match f init node with
-      | Stop result -> result
-      | Continue result -> fold_near_to_far_until (merge_pairs subheaps) ~init:result ~f
-end
-
-(* module type GRAPH_HEAP = sig *)
-(*   type t *)
-(*   type node [@@deriving sexp] *)
-(*   type value *)
-(*   val distance : value -> value -> float *)
-(*   val value : t -> node -> value *)
-(* end *)
 module type DISTANCE = sig
-  type value
+  type value [@@deriving sexp]
   val distance : value -> value -> float
 end
-module type VALUE = sig
-  type t
-  type node [@@deriving sexp]
-  type value
-  val value : t -> node -> value
-end
-module MinHeap(Distance : DISTANCE)(Value : VALUE with type value = Distance.value) = struct
-  module Element = struct
-    type t = { distance_to_target : float; node : Value.node } [@@deriving sexp]
 
-    let compare a b = Float.compare a.distance_to_target b.distance_to_target
-    let of_node target g node = {
-      distance_to_target=Distance.distance target (Value.value g node);
-      node=node
-    }
-    let is_nearer a b = compare a b < 0
-  end
+module Hgraph(Distance : DISTANCE) = struct
+  type node = int [@@deriving sexp]
+  type value = Distance.value [@@deriving sexp]
 
-  include PairingHeap(Element)
-  let min = top
-  let remove_min = remove_top
-  let pop_min = pop_top
-  let of_fold target g f =
-    f ~init:(create ()) ~f:(fun acc node -> add acc (Element.of_node target g node))
-
-  let nearest_k k target g node_fold =
-    let rev, _ = fold_near_to_far_until (of_fold target g node_fold) ~init:([], 0)
-        ~f:(fun ((acc, n) as accn) e -> if n = k then Stop accn else Continue (e::acc, n+1))
-    in List.rev rev
-
-  let nearest target g node_fold =
-    min (of_fold target g node_fold)
-end
-
-(*  XXX too much copy-paste between this and MinHeap? *)
-module MaxHeap(Distance : DISTANCE)(Value : VALUE with type value = Distance.value) = struct
-  module Element = struct
-    type t = { distance_to_target : float; node : Value.node } [@@deriving sexp]
-
-    (*  order reversed to get a max heap  *)
-    let compare a b = Float.compare b.distance_to_target a.distance_to_target
-    let of_node target g node = {
-      distance_to_target=Distance.distance target (Value.value g node);
-      node=node
-    }
-    let is_further a b = compare a b < 0
-  end
-
-  include PairingHeap(Element)
-  let max = top
-  let remove_max = remove_top
-  let pop_max = pop_top
-  let of_fold target g f =
-    f ~init:(create ()) ~f:(fun acc node -> add acc (Element.of_node target g node))
-end
-
-module type NEAREST = sig
-  (* maintain a set of n smallest values (typically implemented with a
-     priority queue / max heap) *)
-  type t_value_computer
-  type node
-  type value
-  type t [@@deriving sexp]
-  val create : t_value_computer -> value -> int -> t
-  type insert = Too_far | Inserted of t
-  val insert : t -> node -> insert
-  (* val of_fold : (init:'acc -> f:('acc -> node -> 'acc) -> 'acc) -> t *)
-  val fold : t -> init:'acc -> f:('acc -> node -> 'acc) -> 'acc
-end
-
-module type VISIT_ME = sig
-  type t_value_computer
-  type nearest
-  type node
-  type value
-  type t [@@deriving sexp]
-  val singleton : t_value_computer -> value -> node -> t
-  val add : t -> node -> t
-  val pop_nearest : t -> (node * t) option
-  val nearest : t -> node option
-  val of_nearest : nearest -> t
-end
-
-module type SEARCH_GRAPH = sig
-  type t [@@deriving sexp]
-  type node [@@deriving sexp]
-
-  module Visited : sig
-    type t [@@deriving sexp]
-    val create : unit -> t
-    type visit = Already_visited | New_visit of t
-    val visit : t -> node -> visit
-    val mem : t -> node -> bool
-  end
-
-  module Neighbours : sig
-    type t
-    type nonrec node = node
-    val fold : t -> init:'acc -> f:('acc -> node -> 'acc) -> 'acc
-  end
-
-  val adjacent : t -> node -> Neighbours.t
-end
-
-module Search
-    (Graph : SEARCH_GRAPH)
-    (VisitMe : VISIT_ME with type node = Graph.node)
-    (Nearest : NEAREST with type node = Graph.node and type value = VisitMe.value)
-    (Distance : DISTANCE with type value = VisitMe.value)
-    (Value : VALUE with type value = Distance.value
-                    and type node = Graph.node
-                    and type t = Nearest.t_value_computer) =
-struct
-  module MinHeap = MinHeap(Distance)(Value)
-
-  (* Searching nearest neighbours in a single knn graph. Greedy search
-     with a limited backtracking set.
-
-     This can be used as a building block of both HNSW and SNG.
-
-     This is expressed as in the NSG paper (this is a different
-     (probably equivalent? not completely sure) formulation than in
-     the HNSW one)
-
-     Here we do not have the shortcut that the best node to visit is
-     worse than the worst nearest node. Does it matter? I think
-     not.  *)
-  let search
-      (hgraph : Value.t)
-      (graph : Graph.t)
-      (start_nodes : VisitMe.t)
-      (target : Value.value)
-      (size_nearest : int) =
-    let rec aux visit_me visited nearest =
-      (*  notes:
-          - nodes in visit_me are possibly not already in visited
-          - in the usage here, Nearest should be a fixed-size
-          max-heap: inserting in the heap when it has reached max size
-          should either do nothing (the inserted is worse than the
-          existing max), or evict the previous max.
-      *)
-      (* printf "search aux:\n"; *)
-      (* printf "  visit-me:\n%s\n" (Sexp.to_string_hum @@ VisitMe.sexp_of_t visit_me); *)
-      (* printf "  visited:\n%s\n" (Sexp.to_string_hum @@ Graph.Visited.sexp_of_t visited); *)
-      (* printf "  nearest:\n%s\n" (Sexp.to_string_hum @@ Nearest.sexp_of_t nearest); *)
-      match VisitMe.pop_nearest visit_me with
-      | None -> nearest
-      | Some (visit_node, visit_me) ->
-        match Graph.Visited.visit visited visit_node with
-        | Already_visited -> aux visit_me visited nearest
-        | New_visit visited ->
-          match Nearest.insert nearest visit_node with
-          | Too_far -> aux visit_me visited nearest
-          | Inserted nearest ->
-            let visit_me =
-              Graph.Neighbours.fold (Graph.adjacent graph visit_node) ~init:visit_me
-                ~f:(fun visit_me node ->
-                    if Graph.Visited.mem visited node then visit_me
-                    else VisitMe.add visit_me node)
-            in
-            aux visit_me visited nearest
-    in
-    (* let visit_me = Graph.VisitMe.singleton start_node in *)
-    let visited = Graph.Visited.create () in
-    let nearest = Nearest.create hgraph target size_nearest in
-    aux start_nodes visited nearest
-
-  let search_one hgraph graph start_nodes target size_nearest =
-    MinHeap.nearest target hgraph (Nearest.fold (search hgraph graph start_nodes target size_nearest))
-end
-
-module type HGRAPH = sig
-  type t
-  type node [@@deriving sexp]
-  type value [@@deriving sexp]
-
-  module LayerGraph : sig
-    (* This must satisfy SEARCH_GRAPH and NEIGHBOUR_GRAPH.  *)
-    type t [@@deriving sexp]
+  module LayerGraph = struct
     type nonrec node = node [@@deriving sexp]
     type nonrec value = value [@@deriving sexp]
 
-    module Visited : sig
-      type t [@@deriving sexp]
-      val create : unit -> t
+    module Visited = struct
+      type t = Set.M(Int).t [@@deriving sexp]
+      let create () = Set.empty (module Int)
       type visit = Already_visited | New_visit of t
-      val visit : t -> node -> visit
-      val mem : t -> node -> bool
+      let visit visited node =
+        let new_visited = Set.add visited node in
+        if phys_equal new_visited visited then Already_visited
+        else New_visit new_visited
+      let mem visited node = Set.mem visited node
     end
 
-    module Neighbours : sig
-      type t
+    module Neighbours = struct
+      (* gah! I wish I knew how to just say module Neighbours = Set
+         with type t = Set.M(Int) or whatever *)
+      type t = Set.M(Int).t [@@deriving sexp]
       type nonrec node = node
-      val create : unit -> t
-      val add : t -> node -> t
-      val length : t -> int
-      val for_all : t -> f:(node -> bool) -> bool
-      val fold : t -> init:'acc -> f:('acc -> node -> 'acc) -> 'acc
+
+      let create () = Set.empty (module Int)
+      let add n node = Set.add n node
+      let length c = Set.length c
+      let for_all n ~f = Set.for_all n ~f
+      let fold c ~init ~f =
+        Set.fold c ~init ~f
+
+      let diff a b =
+        Set.diff a b
+
+      let union a b = Set.union a b
+      let for_all x ~f = Set.for_all x ~f
     end
 
-    val adjacent : t -> node -> Neighbours.t
+    type t = {
+      (* values : value Map.M(Int).t; *)
+      connections : Neighbours.t Map.M(Int).t;
+      (* next_available_node : int *)
+    } [@@deriving sexp]
+
+    (*  XXX TODO: check symmetric  *)
+    let invariant x = true
+    (* let invariant x = *)
+    (*   Map.for_alli x.connections ~f:(fun ~key ~data -> *)
+    (*       Map.mem x.values key && Neighbours.for_all data ~f:(Map.mem x.values)) *)
+
+    (*  XXX code duplication!  *)
+    (* exception Value_not_found of string *)
+    (* let value g node = *)
+    (*   match Map.find g.values node with *)
+    (*   | None -> raise (Value_not_found (Printf.sprintf "node: %s\nvalues:\n%s\nconnections:\n%s" *)
+    (*                                       (Sexp.to_string_hum (sexp_of_node node)) *)
+    (*                                       (Sexp.to_string_hum *)
+    (*                                          ([%sexp_of : Map.M(Int).t] sexp_of_value g.values)) *)
+    (*                                       (Sexp.to_string_hum *)
+    (*                                          ([%sexp_of : Map.M(Int).t] Neighbours.sexp_of_t g.connections)))) *)
+    (*   | Some node -> node *)
+    (* Map.find_exn g.values node *)
+    (* Map.find_exn g.values node *)
+
+    let create values =
+      { (* values; *)
+        connections = Map.empty (module Int);
+        (* next_available_node = 0 *) }
+
+    let fold_neighbours g node ~init ~f =
+      match Map.find g.connections node with
+      | None -> init
+      | Some neighbours ->
+        Set.fold neighbours ~init ~f
+
+    let distance a b = Distance.distance a b
+
+    let adjacent g node =
+      match Map.find g.connections node with
+      | None -> Set.empty (module Int)
+      | Some neighbours -> neighbours
+
+    let connect_symmetric g node neighbours =
+      assert (invariant g);
+      (* assert (Neighbours.for_all neighbours ~f:(Map.mem g.values)); *)
+      (* assert (Map.mem g.values node); *)
+      let connections = Map.set g.connections node neighbours in
+      let g =
+        { connections = Neighbours.fold neighbours ~init:connections
+              ~f:(fun connections neighbour ->
+                  let neighbours_of_neighbour = match Map.find connections neighbour with
+                    | None -> Set.singleton (module Int) node
+                    | Some old_neighbours -> Set.add old_neighbours node
+                  in
+                  Map.set connections neighbour neighbours_of_neighbour) }
+      in
+      assert (invariant g);
+      g
+
+    (* let insert g value neighbours = *)
+    (*   let connect_symmetric connections node neighbours = *)
+    (*     let connections = Map.set connections node neighbours in *)
+    (*     Neighbours.fold neighbours ~init:connections ~f:(fun connections neighbour -> *)
+    (*         let neighbours_of_neighbour = match Map.find connections neighbour with *)
+    (*           | None -> Set.singleton (module Int) node *)
+    (*           | Some old_neighbours -> Set.add old_neighbours node *)
+    (*         in *)
+    (*         Map.set connections neighbour neighbours_of_neighbour) *)
+    (*   in *)
+    (*   TODO *)
+    (*     solve the node registry problem: *)
+    (*     maybe the layergraph abstraction does not work? how to insert a node in there? *)
+    (*     inserting a node into the layergraph should modify the hgraph as well (since it holds values) *)
+    (*   { (\* values = Map.set g.values g.next_available_node value; *\) *)
+    (*     connections = connect_symmetric g.connections g.next_available_node neighbours; *)
+    (*     (\* next_available_node = g.next_available_node + 1 *\) } *)
+
+    let add_neighbours g node added_neighbours =
+      (* let connections = Map.set g.connections node (Neighbours.union (adjacent g node) added_neighbours) in *)
+      let connections = Map.update g.connections node (function
+          | None -> added_neighbours
+          | Some old_neighbours -> Neighbours.union old_neighbours added_neighbours) in
+      let connections = Neighbours.fold added_neighbours ~init:connections
+          ~f:(fun connections added_neighbour ->
+              Map.update connections added_neighbour ~f:(function
+                  | None -> Set.singleton (module Int) node
+                  | Some old -> Set.add old node))
+      in let g = { connections } in
+      assert (invariant g);
+      g
+
+    let remove_neighbours g node removed_neighbours =
+      let connections = Map.update g.connections node (function
+          | None -> Neighbours.create ()
+          | Some old -> Neighbours.diff old removed_neighbours) in
+      let connections = Neighbours.fold removed_neighbours ~init:connections
+          ~f:(fun connections removed_neighbour ->
+              Map.update connections removed_neighbour ~f:(function
+                  | None -> Set.empty (module Int)
+                  | Some old -> Set.remove old node))
+      in let g = { connections } in
+      assert (invariant g);
+      g
   end
 
-  val is_empty : t -> bool
+  type t = {
+    layers : LayerGraph.t Map.M(Int).t;
+    max_layer : int;
+    entry_point : node;
+    values : value Map.M(Int).t;
+    next_available_node : int
+  } [@@deriving sexp]
 
-  val value : t -> node -> value
-  (* val distance : value -> value -> float *)
-  
-  val create : unit -> t
-  val layer : t -> int -> LayerGraph.t
+  exception Value_not_found of string
+  let value h node =
+    Map.find_exn h.values node
+  (* match Map.find h.values node with *)
+  (* | None -> raise (Value_not_found (Printf.sprintf "node: %s\nvalues:\n%s" *)
+  (*                                     (Sexp.to_string_hum (sexp_of_node node)) *)
+  (*                                     (Sexp.to_string_hum ([%sexp_of : Map.M(Int).t] sexp_of_value h.values)))) *)
+  (* | Some node -> node *)
 
-  val max_layer : t -> int
-  val set_max_layer : t -> int -> t
+  (*  not great! entry_point is invalid when the net is empty!  *)
+  let create () =
+    { layers = Map.empty (module Int);
+      max_layer = 0;
+      entry_point = 0;
+      values = Map.empty (module Int);
+      next_available_node = 0 }
 
-  val entry_point : t -> node
-  val set_entry_point : t -> node -> t
+  let is_empty h = Map.is_empty h.values
 
-  (*  add a new node with a given value, and given neighbours  *)
-  (* val insert_in_layer : t -> int -> value -> LayerGraph.Neighbours.t -> t *)
-  val allocate : t -> value -> (t * node)
+  (* let layer hgraph i = Map.find_exn hgraph.layers i *)
+  let layer hgraph i = match Map.find hgraph.layers i with
+    | Some layer -> layer
+    | None -> LayerGraph.create hgraph.values
 
-  (*  overwrite connections of a node  *)
-  val set_connections : t -> int -> node -> LayerGraph.Neighbours.t -> t
+  let max_layer hgraph = hgraph.max_layer
+  let set_max_layer hgraph m = { hgraph with max_layer = m }
+
+  (* Not well defined when the graph is empty, and no check that the
+     entry point is an actual node. However the neighbour sets should
+     be returned as empty if the node is not found, so maybe this is
+     not a problem. *)
+  let entry_point h = h.entry_point
+  let set_entry_point h p = { h with entry_point = p }
+
+  let allocate_node h =
+    h.next_available_node, { h with next_available_node = h.next_available_node+1 }
+
+  let allocate h value =
+    let node, h = allocate_node h in
+    { h with values = Map.set h.values node value }, node
+
+  let invariant h =
+    Map.for_all h.layers ~f:LayerGraph.invariant
+
+  let insert h i_layer value neighbours =
+    let h, node = allocate h value in
+    assert (invariant h);
+    assert (Map.mem h.values node);
+    let layer = layer h i_layer in
+    assert (LayerGraph.invariant layer);
+    let updated_layer = LayerGraph.connect_symmetric layer node neighbours in
+    let h = { h with layers = Map.set h.layers i_layer updated_layer } in
+    assert (invariant h);
+    h
+
+  let set_connections h i_layer node neighbours =
+    let old_neighbours = LayerGraph.adjacent (layer h i_layer) node in
+    let removed_neighbours = LayerGraph.Neighbours.diff old_neighbours neighbours in
+    let added_neighbours = LayerGraph.Neighbours.diff neighbours old_neighbours in
+    let layer = layer h i_layer in
+    let layer = LayerGraph.add_neighbours layer node added_neighbours in
+    let layer = LayerGraph.remove_neighbours layer node removed_neighbours in
+    { h with layers = Map.set h.layers i_layer layer }
 end
 
-module type NEIGHBOUR_GRAPH = sig
-  type t [@@deriving sexp]
-  type node [@@deriving sexp]
+(* module Value(Distance : DISTANCE) = struct *)
+(*   module Hgraph = Hgraph(Distance) *)
+(*   type t = Hgraph.t [@@deriving sexp] *)
+(*   type node = Hgraph.node [@@deriving sexp] *)
+(*   type value = Hgraph.value *)
+(*   let value g n = Hgraph.value g n *)
+(* end *)
 
-  module Neighbours : sig
-    type t
-    val create : unit -> t
-    val add : t -> node -> t
-    val length : t -> int
-    val for_all : t -> f:(node -> bool) -> bool
-  end
+module Nearest(Distance : DISTANCE) = struct
+  module Hgraph = Hgraph(Distance)
+  type t_value_computer = Hgraph.t [@@deriving sexp]
+  type node = Hgraph.node [@@deriving sexp]
+  type value = Hgraph.value [@@deriving sexp]
+  module MaxHeap = Hnsw_algo.MaxHeap(Distance)(Hgraph)
+
+  (* type graph = t [@@deriving sexp] *)
+  type t = { value_computer : t_value_computer sexp_opaque;
+             target : value;
+             size : int;
+             max_size : int;
+             max_priority_queue : MaxHeap.t } [@@deriving sexp]
+
+  let value_computer x = x.value_computer
+  let target x = x.target
+
+  let create value_computer target max_size =
+    { value_computer; target; size=0; max_size; max_priority_queue=MaxHeap.create () }
+
+  let length q = q.size
+
+  type insert = Too_far | Inserted of t
+  let insert q node =
+    let new_element = MaxHeap.Element.of_node q.target q.value_computer node in
+    let size = length q in
+    if size < q.max_size then
+      Inserted { q with max_priority_queue = MaxHeap.add q.max_priority_queue new_element; size=q.size+1 }
+    else if not @@ MaxHeap.Element.is_further new_element (Option.value_exn (MaxHeap.max q.max_priority_queue)) then
+      let new_heap = MaxHeap.add q.max_priority_queue new_element |> MaxHeap.remove_max in
+      Inserted { q with max_priority_queue = new_heap }
+    else Too_far
+  let fold x ~init ~f = MaxHeap.fold x.max_priority_queue ~init ~f:(fun acc e -> f acc e.node)
+  let fold_distance x ~init ~f = MaxHeap.fold x.max_priority_queue ~init ~f:(fun acc e -> f acc e)
 end
 
-module SelectNeighbours
-    (Graph : NEIGHBOUR_GRAPH)
-    (Distance : DISTANCE)
-    (Value : VALUE with type value = Distance.value and type node = Graph.node) = struct
-  module MinHeap = MinHeap(Distance)(Value)
-  (*  
-SELECT-NEIGHBORS-HEURISTIC(hnsw, bEl, cQueue, M, l, extendCandidates,
-                           keepPrunedConnections)
-1  resSet = {}
-2  wcQueue = cQueue // MIN-PRIORITY-QUEUE,
-                    // key – distance to bEl
-3  if extendCandidates
-4    for each e ∈ cQueue
-5      for each e1 ∈ hnsw.adj(e, l)
-6        if e1 ∉ wcQueue
-7          INSERT(wcQueue, e1)
-8  wSet = {}
-9  while wcQueue.size > 0
-10   e = EXTRACT-MIN(wcQueue)
-11   if e is closer to bEl compared to any element from resSet
-12     resSet = resSet ∪ e
-13   else
-14     wSet = wSet ∪ e
-15   if resSet.size > M
-16     break
-17 if keepPrunedConnections // add some of the discarded
-                            // connections
-18   wQueue = MIN-PRIORITY-QUEUE(wSet) // key – distance to bEl
-19   while wQueue.size > 0
-20     resSet = resSet ∪ EXTRACT-MIN(wQueue)
-21     if resSet.size >= M
-22       break
-23 return resSet
+module VisitMe(Distance : DISTANCE) = struct
+  module Hgraph = Hgraph(Distance)
+  module Nearest = Nearest(Distance)
+  module MinHeap = Hnsw_algo.MinHeap(Distance)(Hgraph)
+  type t_value_computer = Hgraph.t [@@deriving sexp]
+  type value = Hgraph.value [@@deriving sexp]
+  type t = { target : value;
+             value_computer : t_value_computer sexp_opaque;
+             heap : MinHeap.t } [@@deriving sexp]
+  type node = Hgraph.node
+  type nearest = Nearest.t
 
-Note: not implementing extendCandidates and keepPrunedConnections for
-now, as the paper says they are off by default and I am unclear on how
-useful they are.
+  let singleton value_computer target n =
+    { target; value_computer;
+      heap = MinHeap.singleton (MinHeap.Element.of_node target value_computer n) }
 
-  *)
-
-  let select_neighbours
-      hgraph (g : Graph.t) target
-      ~value ~distance
-      (nearest_fold : init:'acc -> f:('acc -> Graph.node -> 'acc) -> 'acc)
-      (num_neighbours : int) : Graph.Neighbours.t =
-    let is_closer target (node : MinHeap.Element.t) neighbours =
-      let node_value = value node.node in
-      let distance_target_node = node.distance_to_target in
-      Graph.Neighbours.for_all neighbours ~f:(fun neighbour ->
-          Float.(>) (distance node_value (value neighbour)) distance_target_node
-        )
-    in
-    let min_heap = MinHeap.of_fold target hgraph nearest_fold in
-    MinHeap.fold_near_to_far_until min_heap ~init:(Graph.Neighbours.create ()) ~f:(fun neighbours node ->
-        if is_closer target node neighbours then begin
-          let neighbours = Graph.Neighbours.add neighbours node.node in
-          if Graph.Neighbours.length neighbours >= num_neighbours then MinHeap.Stop neighbours
-          else MinHeap.Continue neighbours
-        end else MinHeap.Continue neighbours
-      )
+  let of_nearest nearest =
+    { target = Nearest.target nearest;
+      value_computer = Nearest.value_computer nearest;
+      heap = Nearest.fold_distance nearest ~init:(MinHeap.create ()) ~f:(fun h e ->
+          MinHeap.add h { node = e.node; distance_to_target = e.distance_to_target }) }
+  let nearest (v : t) =
+    match MinHeap.min v.heap with
+    | None -> None
+    | Some node -> Some node.MinHeap.Element.node
+  let pop_nearest (v : t) =
+    match MinHeap.pop_min v.heap with
+    | None -> None
+    | Some (n, h) -> Some (n.MinHeap.Element.node, { v with heap = h })
+  let add (v : t) node =
+    { v with heap = MinHeap.add v.heap (MinHeap.Element.of_node v.target v.value_computer node) }
 end
 
-module Build
-    (Hgraph : HGRAPH)
-    (VisitMe : VISIT_ME with type node = Hgraph.node
-                         and type value = Hgraph.value
-                         and type t_value_computer = Hgraph.t)
-    (Nearest : NEAREST with type node = Hgraph.node
-                        and type value = Hgraph.value
-                        and type t_value_computer = Hgraph.t
-                        and type t = VisitMe.nearest)
-    (Distance : DISTANCE with type value = Hgraph.value) = struct
-  module Layer = Hgraph.LayerGraph
-  module SearchLayer = Search(Layer)(VisitMe)(Nearest)(Distance)(Hgraph)
-  module SelectNeighbours = SelectNeighbours(Layer)(Distance)(Hgraph)
+module EuclideanDistanceArray = struct
+  type value = float array [@@deriving sexp]
+  let distance (a : value) (b : value) =
+    if Array.length a <> Array.length b then
+      raise (Invalid_argument "distance: arrays with different lengths");
+    let ret = ref 0. in
+    for i = 0 to Array.length a - 1 do
+      let diff = a.(i) -. b.(i) in
+      ret := !ret +. diff *. diff
+    done;
+    Float.sqrt(!ret)
+end
 
-  (*
-  INSERT(hnsw, q, M, efConstruction, levelMult)
-1  wQueue = NIL // MIN-PRIORITY-QUEUE
-                // key – distance to q
-2  visSet = {}
-3  epSet = {hnsw.entPoint}
-4  efOne = 1
-5  level = ⌊-ln(RANDOM(0..1))• levelMult⌋ // Select a random level
-                                         // with an exponential
-                                         // distribution
-6  for l = hnsw.maxLayer downto level+1
-7    wQueue = SEARCH-LEVEL(hnsw, q, epSet, efOne, l)
-8    epSet = {MIN(wQueue)}
-9  for l = min(hnsw.maxLayer, level) downto 0
-10   wQueue = SEARCH-LEVEL(hnsw, q, epSet, efConstruction, l)
-11   neighborsSet = SELECT-NEIGHBORS(q, wQueue, M, l)
-                                        // alg. 3 or alg. 4
-12   bidirectionally connect elements from neighborsSet to q
-13   for each e ∈ neighborsSet // shrink lists of connections
-14     eConnSet = hnsw.adj(e, l)
-15     if eConnSet.size > hnsw.Mmax
-16       eConnQueue = MIN-PRIORITY-QUEUE(eConnSet)
-17       eNewConnSet = SELECT-NEIGHBORS(e, eConnQueue,
-                                        hnsw.maxM, l) // alg. 3 or alg. 4
-18       hnsw.adj(e, l) = eNewConnSet
-19   epSet = SET(wQueue)
-20 if level > hnsw.maxLayer // update hnsw.entPoint
-21   hnsw.maxLayer = level
-22   hnsw.entPoint = q
+module HgraphEuclideanArray = Hgraph(EuclideanDistanceArray)
+module BuildArray = Hnsw_algo.Build
+    (HgraphEuclideanArray)
+    (VisitMe(EuclideanDistanceArray))
+    (Nearest(EuclideanDistanceArray))
+    (EuclideanDistanceArray)
 
+(*
+    level_mult = 1 / log(M)
+
+    M_max_0 = 2 * M
+    they have M_max for layers > 0 and M_max_0 for layer 0
+    (they say these are separate but say nothing about M_max, so I suppose I could let them be equal)
+    M_max is Hgraph.max_num_neighbours
+
+    M in 5..48 (higher: for higher dim, higher recall, drives memory consumption)
+    M == num_neighbours passed to Build.insert and Build.create
+    It is the number of neighbours one selects when inserting one
+    given point. If adding these neighbours makes one node's
+    neighbours be more than M_max, the neighbours are truncated.
+
+    efConstruction can be autoconfigured (how ?), gives example of
+    100, should allow high recall (0.95) during construction
+    efConstruction == num_neighbours_search passed to Build.insert and Build.create
+
+    ef used during search only on layer 0
+    ef == num_neighbours + num_additional_neighbours_search in Search.search and Knn.knn
+    Not clear how to configure. I suppose having it in 0..~M is reasonable.
+
+    TODO: look at code and benchmarks, see how they configure ef and efConstruction and M.
  *)
-  
-  let insert hgraph point ~num_neighbours ~max_num_neighbours ~num_neighbours_search ~level_mult =
-    let insert_in_layer_no_neighbours hgraph i_layer value =
-      let hgraph, node = Hgraph.allocate hgraph value in
-      Hgraph.set_connections hgraph i_layer node (Layer.Neighbours.create ())
-    in
-    
-    if Hgraph.is_empty hgraph then insert_in_layer_no_neighbours hgraph 0 point else
-      let hgraph, point_node = Hgraph.allocate hgraph point in
-      let level = Int.of_float @@ Float.round_nearest @@ -. (Float.log (Random.float 1.)) *. level_mult in
-      let rec aux (hgraph : Hgraph.t) (i_layer : int) (start_nodes : VisitMe.t) =
-        if i_layer < 0 then hgraph, start_nodes else begin
-          let layer_graph = Hgraph.layer hgraph i_layer in
-          if i_layer > level then begin
-            match SearchLayer.search_one hgraph layer_graph start_nodes point num_neighbours_search with
-            | None -> failwith "unexpected: found no neighbour at all"
-            | Some nearest -> aux hgraph (i_layer - 1)
-                                (VisitMe.singleton hgraph point nearest.node)
-          end else begin
-            let nearest = SearchLayer.search hgraph layer_graph start_nodes point num_neighbours_search in
-            let neighbours = SelectNeighbours.select_neighbours
-                hgraph
-                ~value:(Hgraph.value hgraph)
-                ~distance:Distance.distance
-                layer_graph point (Nearest.fold nearest) num_neighbours
-            in
-            (* let hgraph = Hgraph.insert hgraph i_layer point neighbours in *)
-            let hgraph = Hgraph.set_connections hgraph i_layer point_node neighbours in
-            let hgraph = Layer.Neighbours.fold neighbours ~init:hgraph
-                ~f:(fun (hgraph : Hgraph.t) (node : Layer.node) ->
-                    (* recompute this since we changed hgraph above  *)
-                    let layer_graph = Hgraph.layer hgraph i_layer in
-                    let connections = Layer.adjacent layer_graph node in
-                    if Layer.Neighbours.length connections > max_num_neighbours then begin
-                      let new_connections =
-                        SelectNeighbours.select_neighbours hgraph layer_graph
-                          ~value:(Hgraph.value hgraph)
-                          ~distance:Distance.distance
-                          (Hgraph.value hgraph node)
-                          (Layer.Neighbours.fold connections)
-                          max_num_neighbours
-                      in
-                      Hgraph.set_connections hgraph i_layer node new_connections
-                    end else hgraph
-                  )
-            in aux hgraph (i_layer - 1) (VisitMe.of_nearest nearest)
-          end
-        end
-      in
-      let hgraph, nearest =
-        aux hgraph (Hgraph.max_layer hgraph)
-          (VisitMe.singleton hgraph point (Hgraph.entry_point hgraph))
-      in
-      (* We use max_layer/set_max_layer to notice that we have to update
-         the entry point. This is not satisfying because the graph could
-         manage its max layer by itself, since it knows about it. *)
-      if level > (Hgraph.max_layer hgraph) then
-        let point_node = match VisitMe.nearest nearest with
-          | Some node -> node
-          | None -> failwith "unexpected: visit-me set is empty!"
-        in
-        Hgraph.set_max_layer (Hgraph.set_entry_point hgraph point_node) level
-      else hgraph
+let build_array fold_data =
+  let num_neighbours = 3 in
+  let max_num_neighbours = 2 * num_neighbours in
+  let num_neighbours_search = 7 in
+  let level_mult = 1. /. Float.log (Float.of_int num_neighbours) in
+  BuildArray.create fold_data
+    ~num_neighbours ~max_num_neighbours ~num_neighbours_search ~level_mult
 
-  let create point_fold ~num_neighbours ~max_num_neighbours ~num_neighbours_search ~level_mult =
-    point_fold ~init:(Hgraph.create ()) ~f:(fun hgraph point ->
-        insert hgraph point ~num_neighbours ~max_num_neighbours ~num_neighbours_search ~level_mult)
+module KnnArray = Hnsw_algo.Knn
+    (HgraphEuclideanArray)
+    (VisitMe(EuclideanDistanceArray))
+    (Nearest(EuclideanDistanceArray))
+    (EuclideanDistanceArray)
+
+let knn_array hgraph point num_neighbours =
+  let num_additional_neighbours_search = 1 in
+  KnnArray.knn hgraph point ~num_neighbours ~num_additional_neighbours_search
+
+module EuclideanDistanceBigarray = struct
+  type value = Lacaml.S.vec (* (float, Bigarray.float32_elt, Bigarray.c_layout) Bigarray.Array1.t *)
+  let list_of_bigarray v =
+    let acc = ref [] in
+    for i = 0 to Bigarray.Array1.dim v - 1 do
+      acc := v.{i}::!acc
+    done;
+    List.rev !acc
+  let sexp_of_value v = Sexp.List (List.map ~f:(fun e -> Sexp.Atom (Float.to_string e)) (list_of_bigarray v))
+  let value_of_sexp s = invalid_arg "EuclideanDistanceBigarray.value_of_sexp: not implemented"
+  let distance_lacaml (a : value) (b : value) =
+    Float.sqrt @@ Lacaml.S.Vec.ssqr_diff a b
+  (* let diff = Lacaml.S.copy b in *)
+  (* Lacaml.S.axpy ~alpha:(-1.) a diff; (\*  diff := diff - a  *\) *)
+  (* Lacaml.S.nrm2 diff *)
+
+  let distance_by_hand (a : value) (b : value) =
+    let open Bigarray in
+    (* if Array1.dim a <> Array1.dim b then *)
+    (*   raise (Invalid_argument "distance: arrays with different lengths"); *)
+    let ret = ref 0. in
+    for i = 1 to Array1.dim a do
+      let diff = a.{i} -. b.{i} in
+      ret := !ret +. diff *. diff
+    done;
+    Float.sqrt(!ret)
+
+  let distance = distance_lacaml
 end
 
-module type KNN_HGRAPH = sig
-  type t
-  type value
-  type node [@@deriving sexp]
-  module LayerGraph : sig
-    include SEARCH_GRAPH with type node = node
-    (* val distance : value -> value -> float *)
-    (* val value : t -> node -> value *)
-  end
+module HgraphEuclideanBigarray = Hgraph(EuclideanDistanceBigarray)
+module BuildBigarray = Hnsw_algo.Build
+    (HgraphEuclideanBigarray)
+    (VisitMe(EuclideanDistanceBigarray))
+    (Nearest(EuclideanDistanceBigarray))
+    (EuclideanDistanceBigarray)
 
-  val layer : t -> int -> LayerGraph.t
-  val entry_point : t -> node
-  val max_layer : t -> int
-  val value : t -> node -> value
-end
+let build_bigarray ?(num_neighbours=5) ?(num_neighbours_build=10) fold_data =
+  let max_num_neighbours = 2 * num_neighbours in
+  let level_mult = 1. /. Float.log (Float.of_int num_neighbours) in
+  BuildBigarray.create fold_data
+    ~num_neighbours ~max_num_neighbours ~num_neighbours_search:num_neighbours_build ~level_mult
 
-module Knn
-    (Hgraph : KNN_HGRAPH)
-    (VisitMe : VISIT_ME with type node = Hgraph.node
-                         and type value = Hgraph.value
-                         and type t_value_computer = Hgraph.t)
-    (Nearest : NEAREST with type node = Hgraph.node
-                        and type value = VisitMe.value
-                        and type t_value_computer = Hgraph.t)
-    (Distance : DISTANCE with type value = Hgraph.value) = struct
-  (* K-NN-SEARCH(hnsw, q, K, ef)
-   * 1 wQueue = NIL
-   * 2 epSet = {hnsw.entPoint}
-   * 3 efOne = 1
-   * 4 levelZero = 0
-   * 5 for l = hnsw.maxLayer downto 1
-   * 6   wQueue = SEARCH-LEVEL(hnsw, q, epSet, efOne, l)
-   * 7   epSet = {MIN (wQueue)}
-   * 8 wQueue = SEARCH-LEVEL(hnsw, q, epSet, ef, levelZero)
-   * 9 resSet = {}
-   * 10 for i = 0 to K-1
-   * 11   resSet = resSet ∪ EXTRACT-MIN(wQueue)
-   * 12 return resSet
+module KnnBigarray = Hnsw_algo.Knn
+    (HgraphEuclideanBigarray)
+    (VisitMe(EuclideanDistanceBigarray))
+    (Nearest(EuclideanDistanceBigarray))
+    (EuclideanDistanceBigarray)
 
-     notes:
-     - wqueue is not always needed if we replace SEARCH-LEVEL by SEARCH-LEVEL-MIN
+let knn_bigarray hgraph point ?(num_additional_neighbours_search=0) num_neighbours =
+  KnnBigarray.knn hgraph point ~num_neighbours ~num_additional_neighbours_search
+
+(* XXX TODO: make the user instantiate one simple functor instead of
+   this copy-paste madness *)
+(*  potential speedups:
+    - get values from a bigarray instead of a map
   *)
-
-  module Search = Search(Hgraph.LayerGraph)(VisitMe)(Nearest)(Distance)(Hgraph)
-  module MinHeap = MinHeap(Distance)(Hgraph)
-
-  let knn hgraph target ?(num_additional_neighbours_search=0) ~num_neighbours =
-    let rec aux start_nodes i_layer =
-      (* printf "knn: layer: %d start nodes:\n%s\n" i_layer
-         (Sexp.to_string_hum @@ VisitMe.sexp_of_t start_nodes); *)
-      let layer = Hgraph.layer hgraph i_layer in
-      if i_layer <= 0 then
-        let neighbours =
-          Search.search hgraph layer start_nodes target (num_neighbours + num_additional_neighbours_search)
-        in
-        (* printf "knn: final search for neighbours:\n%s\n"
-           (Sexp.to_string_hum @@ Nearest.sexp_of_t neighbours); *)
-        MinHeap.nearest_k num_neighbours target hgraph (Nearest.fold neighbours)
-      else
-        match Search.search_one hgraph layer start_nodes target 1 with
-        | None -> failwith "unexpected: found no neighbour at all"
-        | Some nearest ->
-          aux
-            (VisitMe.singleton hgraph target nearest.node)
-            (i_layer - 1)
-    in
-    aux
-      (VisitMe.singleton hgraph target (Hgraph.entry_point hgraph))
-      (Hgraph.max_layer hgraph)
-end
-
