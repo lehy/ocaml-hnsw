@@ -131,40 +131,43 @@ end
 let main () =
   let data = Dataset.read "fashion-mnist-784-euclidean.hdf5" in
   printf "read dataset: %s\n" (Sexp.to_string_hum @@ Dataset.sexp_of_t data);
-  let fold_cols ~init ~f ba =
-    let n = Bigarray.Array2.dim2 ba in
-    let k_print = n / 100 in
-    let acc = ref init in
-    for i = 1 to n do
-      if i % k_print = 0 then begin
-        printf "\r              \r%d/%d %d%%%!" i n
-          (Int.of_float (100. *. Float.of_int i /. Float.of_int n));
-      end;
-      let row = Lacaml.S.Mat.col ba i in
-      acc := f !acc row
-    done;
-    printf "\n";
-    !acc
-  in
+  (* let fold_cols ~init ~f ba = *)
+  (*   let n = Bigarray.Array2.dim2 ba in *)
+  (*   let k_print = n / 100 in *)
+  (*   let acc = ref init in *)
+  (*   for i = 1 to n do *)
+  (*     if i % k_print = 0 then begin *)
+  (*       printf "\r              \r%d/%d %d%%%!" i n *)
+  (*         (Int.of_float (100. *. Float.of_int i /. Float.of_int n)); *)
+  (*     end; *)
+  (*     let row = Lacaml.S.Mat.col ba i in *)
+  (*     acc := f !acc row *)
+  (*   done; *)
+  (*   printf "\n"; *)
+  (*   !acc *)
+  (* in *)
   let t0 = Unix.gettimeofday () in
-  let hgraph = Hnsw.build_bigarray ~num_neighbours:5 (fold_cols data.train) in
+  let hgraph = Hnsw.Ba.build_batch ~num_neighbours:5 ~max_num_neighbours:5
+      ~num_neighbours_build:100 data.train in
   let t1 = Unix.gettimeofday () in
   printf "index construction: %f s\n%!" (t1-.t0);
   let num_neighbours = Bigarray.Array2.dim1 data.test_distances in
-  let got_distances = nans_like data.test_distances in
-  let _ =
-    fold_cols data.test
-      ~init:1
-      ~f:(fun j test_col ->
-          let neighbours =
-            Hnsw.knn_bigarray hgraph test_col num_neighbours ~num_additional_neighbours_search:5
-          in
-          List.iteri neighbours ~f:(fun i e ->
-              got_distances.{i+1,j} <- e.distance_to_target
-            );
-          j+1
-        )
-  in
+  (* XXX setting num neighbours search to num neighbours for now,
+     since we are missing things in the search algo *)
+  let got_distances = Hnsw.Ba.knn_batch hgraph data.test num_neighbours ~num_neighbours_search:(num_neighbours) in
+  (* let _ = *)
+  (*   fold_cols data.test *)
+  (*     ~init:1 *)
+  (*     ~f:(fun j test_col -> *)
+  (*         let neighbours = *)
+  (*           Hnsw.knn_bigarray hgraph test_col num_neighbours ~num_additional_neighbours_search:5 *)
+  (*         in *)
+  (*         List.iteri neighbours ~f:(fun i e -> *)
+  (*             got_distances.{i+1,j} <- e.distance_to_target *)
+  (*           ); *)
+  (*         j+1 *)
+  (*       ) *)
+  (* in *)
   let t2 = Unix.gettimeofday () in
   let num_queries = Bigarray.Array2.dim2 data.test |> Float.of_int in
   printf "query: %f s, %f q/s, %f s/q\n%!"

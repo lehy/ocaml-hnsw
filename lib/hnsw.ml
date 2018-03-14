@@ -1,4 +1,5 @@
 open Base
+open Stdio
 
 module type DISTANCE = sig
   type value [@@deriving sexp]
@@ -292,41 +293,41 @@ module VisitMe(Distance : DISTANCE) = struct
   let nearest (v : t) =
     match MinHeap.min v.heap with
     | None -> None
-    | Some node -> Some node.MinHeap.Element.node
+    | Some node -> Some node.node
   let pop_nearest (v : t) =
     match MinHeap.pop_min v.heap with
     | None -> None
-    | Some (n, h) -> Some (n.MinHeap.Element.node, { v with heap = h })
+    | Some (n, h) -> Some (n.node, { v with heap = h })
   let add (v : t) node =
     { v with heap = MinHeap.add v.heap (MinHeap.Element.of_node v.target v.value_computer node) }
 end
 
-module EuclideanDistanceArray = struct
-  type value = float array [@@deriving sexp]
-  let distance (a : value) (b : value) =
-    if Array.length a <> Array.length b then
-      raise (Invalid_argument "distance: arrays with different lengths");
-    let ret = ref 0. in
-    for i = 0 to Array.length a - 1 do
-      let diff = a.(i) -. b.(i) in
-      ret := !ret +. diff *. diff
-    done;
-    Float.sqrt(!ret)
-end
+(* module EuclideanDistanceArray = struct *)
+(*   type value = float array [@@deriving sexp] *)
+(*   let distance (a : value) (b : value) = *)
+(*     if Array.length a <> Array.length b then *)
+(*       raise (Invalid_argument "distance: arrays with different lengths"); *)
+(*     let ret = ref 0. in *)
+(*     for i = 0 to Array.length a - 1 do *)
+(*       let diff = a.(i) -. b.(i) in *)
+(*       ret := !ret +. diff *. diff *)
+(*     done; *)
+(*     Float.sqrt(!ret) *)
+(* end *)
 
-module HgraphEuclideanArray = Hgraph(EuclideanDistanceArray)
-module BuildArray = Hnsw_algo.Build
-    (HgraphEuclideanArray)
-    (VisitMe(EuclideanDistanceArray))
-    (Nearest(EuclideanDistanceArray))
-    (EuclideanDistanceArray)
+(* module HgraphEuclideanArray = Hgraph(EuclideanDistanceArray) *)
+(* module BuildArray = Hnsw_algo.Build *)
+(*     (HgraphEuclideanArray) *)
+(*     (VisitMe(EuclideanDistanceArray)) *)
+(*     (Nearest(EuclideanDistanceArray)) *)
+(*     (EuclideanDistanceArray) *)
 
 (*
     level_mult = 1 / log(M)
 
     M_max_0 = 2 * M
     they have M_max for layers > 0 and M_max_0 for layer 0
-    (they say these are separate but say nothing about M_max, so I suppose I could let them be equal)
+    nmslib sets M_max = M.
     M_max is Hgraph.max_num_neighbours
 
     M in 5..48 (higher: for higher dim, higher recall, drives memory consumption)
@@ -338,85 +339,150 @@ module BuildArray = Hnsw_algo.Build
     efConstruction can be autoconfigured (how ?), gives example of
     100, should allow high recall (0.95) during construction
     efConstruction == num_neighbours_search passed to Build.insert and Build.create
+    This is set to 200 or 400 in the ann benchmark.
 
     ef used during search only on layer 0
-    ef == num_neighbours + num_additional_neighbours_search in Search.search and Knn.knn
+    Currently ef == num_neighbours + num_additional_neighbours_search in Search.search and Knn.knn
     Not clear how to configure. I suppose having it in 0..~M is reasonable.
+    Note that ATM we need ef > k for our implementation to work, which is a shame: it limits
+    how fast it can go.
 
     TODO: look at code and benchmarks, see how they configure ef and efConstruction and M.
  *)
-let build_array fold_data =
-  let num_neighbours = 3 in
-  let max_num_neighbours = 2 * num_neighbours in
-  let num_neighbours_search = 7 in
-  let level_mult = 1. /. Float.log (Float.of_int num_neighbours) in
-  BuildArray.create fold_data
-    ~num_neighbours ~max_num_neighbours ~num_neighbours_search ~level_mult
+(* let build_array fold_data = *)
+(*   let num_neighbours = 3 in *)
+(*   let max_num_neighbours = 2 * num_neighbours in *)
+(*   let num_neighbours_search = 7 in *)
+(*   let level_mult = 1. /. Float.log (Float.of_int num_neighbours) in *)
+(*   BuildArray.create fold_data *)
+(*     ~num_neighbours ~max_num_neighbours ~num_neighbours_search ~level_mult *)
 
-module KnnArray = Hnsw_algo.Knn
-    (HgraphEuclideanArray)
-    (VisitMe(EuclideanDistanceArray))
-    (Nearest(EuclideanDistanceArray))
-    (EuclideanDistanceArray)
+(* module KnnArray = Hnsw_algo.Knn *)
+(*     (HgraphEuclideanArray) *)
+(*     (VisitMe(EuclideanDistanceArray)) *)
+(*     (Nearest(EuclideanDistanceArray)) *)
+(*     (EuclideanDistanceArray) *)
 
-let knn_array hgraph point num_neighbours =
-  let num_additional_neighbours_search = 1 in
-  KnnArray.knn hgraph point ~num_neighbours ~num_additional_neighbours_search
+(* let knn_array hgraph point num_neighbours = *)
+(*   let num_additional_neighbours_search = 1 in *)
+(*   KnnArray.knn hgraph point ~num_neighbours ~num_additional_neighbours_search *)
 
-module EuclideanDistanceBigarray = struct
-  type value = Lacaml.S.vec (* (float, Bigarray.float32_elt, Bigarray.c_layout) Bigarray.Array1.t *)
-  let list_of_bigarray v =
-    let acc = ref [] in
-    for i = 0 to Bigarray.Array1.dim v - 1 do
-      acc := v.{i}::!acc
-    done;
-    List.rev !acc
-  let sexp_of_value v = Sexp.List (List.map ~f:(fun e -> Sexp.Atom (Float.to_string e)) (list_of_bigarray v))
-  let value_of_sexp s = invalid_arg "EuclideanDistanceBigarray.value_of_sexp: not implemented"
-  let distance_lacaml (a : value) (b : value) =
-    Float.sqrt @@ Lacaml.S.Vec.ssqr_diff a b
-  (* let diff = Lacaml.S.copy b in *)
-  (* Lacaml.S.axpy ~alpha:(-1.) a diff; (\*  diff := diff - a  *\) *)
-  (* Lacaml.S.nrm2 diff *)
+(* module HgraphEuclideanBigarray = Hgraph(EuclideanDistanceBigarray) *)
+(* module BuildBigarray = Hnsw_algo.Build *)
+(*     (HgraphEuclideanBigarray) *)
+(*     (VisitMe(EuclideanDistanceBigarray)) *)
+(*     (Nearest(EuclideanDistanceBigarray)) *)
+(*     (EuclideanDistanceBigarray) *)
 
-  let distance_by_hand (a : value) (b : value) =
-    let open Bigarray in
-    (* if Array1.dim a <> Array1.dim b then *)
-    (*   raise (Invalid_argument "distance: arrays with different lengths"); *)
-    let ret = ref 0. in
-    for i = 1 to Array1.dim a do
-      let diff = a.{i} -. b.{i} in
-      ret := !ret +. diff *. diff
-    done;
-    Float.sqrt(!ret)
+(* let build_bigarray ?(num_neighbours=5) ?(num_neighbours_build=10) fold_data = *)
+(*   let max_num_neighbours = 2 * num_neighbours in *)
+(*   let level_mult = 1. /. Float.log (Float.of_int num_neighbours) in *)
+(*   BuildBigarray.create fold_data *)
+(*     ~num_neighbours ~max_num_neighbours ~num_neighbours_search:num_neighbours_build ~level_mult *)
 
-  let distance = distance_lacaml
-end
+(* module KnnBigarray = Hnsw_algo.Knn *)
+(*     (HgraphEuclideanBigarray) *)
+(*     (VisitMe(EuclideanDistanceBigarray)) *)
+(*     (Nearest(EuclideanDistanceBigarray)) *)
+(*     (EuclideanDistanceBigarray) *)
 
-module HgraphEuclideanBigarray = Hgraph(EuclideanDistanceBigarray)
-module BuildBigarray = Hnsw_algo.Build
-    (HgraphEuclideanBigarray)
-    (VisitMe(EuclideanDistanceBigarray))
-    (Nearest(EuclideanDistanceBigarray))
-    (EuclideanDistanceBigarray)
-
-let build_bigarray ?(num_neighbours=5) ?(num_neighbours_build=10) fold_data =
-  let max_num_neighbours = 2 * num_neighbours in
-  let level_mult = 1. /. Float.log (Float.of_int num_neighbours) in
-  BuildBigarray.create fold_data
-    ~num_neighbours ~max_num_neighbours ~num_neighbours_search:num_neighbours_build ~level_mult
-
-module KnnBigarray = Hnsw_algo.Knn
-    (HgraphEuclideanBigarray)
-    (VisitMe(EuclideanDistanceBigarray))
-    (Nearest(EuclideanDistanceBigarray))
-    (EuclideanDistanceBigarray)
-
-let knn_bigarray hgraph point ?(num_additional_neighbours_search=0) num_neighbours =
-  KnnBigarray.knn hgraph point ~num_neighbours ~num_additional_neighbours_search
+(* let knn_bigarray hgraph point ?(num_additional_neighbours_search=0) num_neighbours = *)
+(*   KnnBigarray.knn hgraph point ~num_neighbours ~num_additional_neighbours_search *)
 
 (* XXX TODO: make the user instantiate one simple functor instead of
    this copy-paste madness *)
 (*  potential speedups:
     - get values from a bigarray instead of a map
-  *)
+*)
+
+module MakeSimple(Distance : DISTANCE) = struct
+  module Hgraph = Hgraph(Distance)
+  module VisitMe = VisitMe(Distance)
+  module Nearest = Nearest(Distance)
+  module Build = Hnsw_algo.Build(Hgraph)(VisitMe)(Nearest)(Distance)
+  module Knn = Hnsw_algo.Knn(Hgraph)(VisitMe)(Nearest)(Distance)
+
+  type t = Hgraph.t
+  type value = Distance.value
+
+  let build ?(num_neighbours=5) ?(num_neighbours_build=100) fold_rows =
+    let max_num_neighbours0 = 2 * num_neighbours in
+    let level_mult = 1. /. Float.log (Float.of_int num_neighbours) in
+    Build.create fold_rows
+      ~num_neighbours ~max_num_neighbours0 ~num_neighbours_search:num_neighbours_build ~level_mult
+
+  let knn (hgraph : t) (point : value) ?(num_neighbours_search=5) num_neighbours =
+    Knn.knn hgraph point ~num_neighbours ~num_neighbours_search
+end
+
+module type BATCH = sig
+  include DISTANCE
+  type t
+  val fold : t -> init:'acc -> f:('acc -> value -> 'acc) -> 'acc
+  val length : t -> int
+  module Distances : sig
+    type t
+    val create : len_batch:int -> num_neighbours:int -> t
+      (*  this element list type is ugly, pull it out  *)
+    val set : t -> int -> _ Hnsw_algo.value_distance list -> unit
+  end
+end
+
+module Make(Batch : BATCH) = struct
+  include MakeSimple(Batch)
+
+  let build_batch ?(num_neighbours=5) ?(num_neighbours_build=100) data =
+    build ~num_neighbours ~num_neighbours_build (Batch.fold data)
+
+  let knn_batch hgraph batch ?num_neighbours_search num_neighbours =
+    let distances = Batch.Distances.create ~len_batch:(Batch.length batch) ~num_neighbours in
+    let _ = Batch.fold batch ~init:1 ~f:(fun i row ->
+        let neighbours = knn hgraph row ?num_neighbours_search num_neighbours in
+        Batch.Distances.set distances i neighbours;
+        i + 1) in
+    distances
+end
+
+module Ba = struct
+  module Batch = struct
+    type value = Lacaml.S.vec (* (float, Bigarray.float32_elt, Bigarray.c_layout) Bigarray.Array1.t *)
+    type t = Lacaml.S.mat
+    let list_of_bigarray v =
+      let acc = ref [] in
+      for i = 0 to Bigarray.Array1.dim v - 1 do
+        acc := v.{i}::!acc
+      done;
+      List.rev !acc
+    let sexp_of_value v = Sexp.List (List.map ~f:(fun e -> Sexp.Atom (Float.to_string e)) (list_of_bigarray v))
+    let value_of_sexp s = invalid_arg "EuclideanDistanceBigarray.value_of_sexp: not implemented"
+    let distance (a : value) (b : value) =
+      Float.sqrt @@ Lacaml.S.Vec.ssqr_diff a b
+
+    let fold ba ~init ~f =
+      let n = Bigarray.Array2.dim2 ba in
+      let k_print = n / 100 in
+      let acc = ref init in
+      for i = 1 to n do
+        if i % k_print = 0 then begin
+          printf "\r              \r%d/%d %d%%%!" i n
+            (Int.of_float (100. *. Float.of_int i /. Float.of_int n));
+        end;
+        let row = Lacaml.S.Mat.col ba i in
+        acc := f !acc row
+      done;
+      printf "\n";
+      !acc
+
+    let length ba = Lacaml.S.Mat.dim1 ba
+    module Distances = struct
+      type t = Lacaml.S.Mat.t
+      let create ~len_batch ~num_neighbours = Lacaml.S.Mat.create num_neighbours len_batch
+      let set mat j neighbours =
+        let _ = List.fold_left neighbours ~init:1 ~f:(fun i { Hnsw_algo.distance_to_target; _ } ->
+            mat.{i, j} <- distance_to_target;
+            i+1)
+        in ()
+    end
+  end
+  include Make(Batch)
+end
