@@ -84,7 +84,7 @@ module Dataset = struct
   
   let sexp_of_t t = Sexp_of_t.of_dataset t |> Sexp_of_t.sexp_of_t
   
-  let read f =
+  let read ?limit f =
     let data = H5.open_rdonly ("../../../data/" ^ f) in
     (* printf "%s: %s\n" f (Sexp.to_string_hum @@ [%sexp_of : string list] @@ H5.ls data); *)
     let to_lacaml x = Bigarray.Array2.change_layout x Bigarray.fortran_layout in
@@ -98,7 +98,12 @@ module Dataset = struct
     (*   (Bigarray.Array2.dim1 test) *)
     (*   (Bigarray.Array2.dim2 test) *)
     (*   distance; *)
-    { train; test; test_distances; distance=Distance.of_string distance }
+    let ret = { train; test; test_distances; distance=Distance.of_string distance } in
+    let ret = match limit with
+      | None -> ret
+      | Some limit -> { ret with train = Bigarray.Array2.sub_right ret.train 1 limit }
+    in
+    ret
   ;;
 end;;
 
@@ -129,7 +134,7 @@ module Recall = struct
 end
 
 let main () =
-  let data = Dataset.read "fashion-mnist-784-euclidean.hdf5" in
+  let data = Dataset.read "fashion-mnist-784-euclidean.hdf5" ~limit:10000 in
   printf "read dataset: %s\n" (Sexp.to_string_hum @@ Dataset.sexp_of_t data);
   (* let fold_cols ~init ~f ba = *)
   (*   let n = Bigarray.Array2.dim2 ba in *)
@@ -154,7 +159,9 @@ let main () =
   let num_neighbours = Bigarray.Array2.dim1 data.test_distances in
   (* XXX setting num neighbours search to num neighbours for now,
      since we are missing things in the search algo *)
-  let got_distances = Hnsw.Ba.knn_batch hgraph data.test num_neighbours ~num_neighbours_search:(num_neighbours) in
+  let got_distances =
+    Hnsw.Ba.knn_batch hgraph data.test num_neighbours ~num_neighbours_search:(num_neighbours)
+  in
   (* let _ = *)
   (*   fold_cols data.test *)
   (*     ~init:1 *)
