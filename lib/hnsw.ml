@@ -473,15 +473,13 @@ module Ba = struct
       printf "\n";
       !acc
 
-    let length ba = Lacaml.S.Mat.dim1 ba
+    let length ba = Lacaml.S.Mat.dim2 ba
     module Distances = struct
       type t = Lacaml.S.Mat.t
       let create ~len_batch ~num_neighbours = Lacaml.S.Mat.create num_neighbours len_batch
       let set mat j neighbours =
-        let _ = List.fold_left neighbours ~init:1 ~f:(fun i { Hnsw_algo.distance_to_target; _ } ->
-            mat.{i, j} <- distance_to_target;
-            i+1)
-        in ()
+        List.iteri neighbours ~f:(fun i { Hnsw_algo.distance_to_target; _ } ->
+            mat.{i+1, j} <- distance_to_target)
     end
   end
   include Make(Batch)
