@@ -134,16 +134,23 @@ end
 
 module type NEAREST = sig
   (* maintain a set of n smallest values (typically implemented with a
-     priority queue / max heap) *)
+     priority queue / max heap)
+
+     Actually we want to maintain two sets of values:
+     - ef (typically 5)
+     - k (typically 100)
+ *)
   type t_value_computer
   type node
   type value
   type t [@@deriving sexp]
-  val create : t_value_computer -> value -> int -> t
-  type insert = Too_far | Inserted of t
+  (* val create : t_value_computer -> value -> int -> t *)
+  val create : t_value_computer -> ef:int -> k:int -> t
+  type insert = Too_far | InsertedEf of t | InsertedNotEf of t
   val insert : t -> node -> insert
   (* val of_fold : (init:'acc -> f:('acc -> node -> 'acc) -> 'acc) -> t *)
   val fold : t -> init:'acc -> f:('acc -> node -> 'acc) -> 'acc
+  val max_distance : t -> float
 end
 
 module type VISIT_ME = sig
@@ -157,6 +164,7 @@ module type VISIT_ME = sig
   val pop_nearest : t -> (node * t) option
   val nearest : t -> node option
   val of_nearest : nearest -> t
+  val fold : t -> init:'acc -> f:('acc -> node -> 'acc) -> 'acc
 end
 
 module type SEARCH_GRAPH = sig
@@ -166,8 +174,9 @@ module type SEARCH_GRAPH = sig
   module Visited : sig
     type t [@@deriving sexp]
     val create : unit -> t
-    type visit = Already_visited | New_visit of t
-    val visit : t -> node -> visit
+    (* type visit = Already_visited | New_visit of t *)
+    (* val visit : t -> node -> visit *)
+    val add : t -> node -> t
     val mem : t -> node -> bool
   end
 
@@ -183,7 +192,9 @@ end
 module Search
     (Graph : SEARCH_GRAPH)
     (VisitMe : VISIT_ME with type node = Graph.node)
-    (Nearest : NEAREST with type node = Graph.node and type value = VisitMe.value)
+    (Nearest : NEAREST with type node = Graph.node
+                        and type value = VisitMe.value
+                        and type t_value_computer = VisitMe.t_value_computer)
     (Distance : DISTANCE with type value = VisitMe.value)
     (Value : VALUE with type value = Distance.value
                     and type node = Graph.node
@@ -233,50 +244,150 @@ struct
      array).
 
   *)
-  let search
-      (hgraph : Value.t)
-      (graph : Graph.t)
-      (start_nodes : VisitMe.t)
-      (target : Value.value)
-      (size_nearest : int) =
-    let rec aux visit_me visited nearest =
-      (*  notes:
-          - nodes in visit_me are possibly not already in visited
-          - in the usage here, Nearest should be a fixed-size
-          max-heap: inserting in the heap when it has reached max size
-          should either do nothing (the inserted is worse than the
-          existing max), or evict the previous max.
-      *)
-      (* printf "search aux:\n"; *)
-      (* printf "  visit-me:\n%s\n" (Sexp.to_string_hum @@ VisitMe.sexp_of_t visit_me); *)
-      (* printf "  visited:\n%s\n" (Sexp.to_string_hum @@ Graph.Visited.sexp_of_t visited); *)
-      (* printf "  nearest:\n%s\n" (Sexp.to_string_hum @@ Nearest.sexp_of_t nearest); *)
+  (* let search *)
+  (*     (hgraph : Value.t) *)
+  (*     (graph : Graph.t) *)
+  (*     (start_nodes : VisitMe.t) *)
+  (*     (target : Value.value) *)
+  (*     (size_nearest : int) = *)
+  (*   let rec aux visit_me visited nearest = *)
+  (*     (\*  notes: *)
+  (*         - nodes in visit_me are possibly not already in visited *)
+  (*         - in the usage here, Nearest should be a fixed-size *)
+  (*         max-heap: inserting in the heap when it has reached max size *)
+  (*         should either do nothing (the inserted is worse than the *)
+  (*         existing max), or evict the previous max. *)
+  (*     *\) *)
+  (*     (\* printf "search aux:\n"; *\) *)
+  (*     (\* printf "  visit-me:\n%s\n" (Sexp.to_string_hum @@ VisitMe.sexp_of_t visit_me); *\) *)
+  (*     (\* printf "  visited:\n%s\n" (Sexp.to_string_hum @@ Graph.Visited.sexp_of_t visited); *\) *)
+  (*     (\* printf "  nearest:\n%s\n" (Sexp.to_string_hum @@ Nearest.sexp_of_t nearest); *\) *)
+  (*     match VisitMe.pop_nearest visit_me with *)
+  (*     | None -> nearest *)
+  (*     | Some (visit_node, visit_me) -> *)
+  (*       match Graph.Visited.visit visited visit_node with *)
+  (*       | Already_visited -> aux visit_me visited nearest *)
+  (*       | New_visit visited -> *)
+  (*         match Nearest.insert nearest visit_node with *)
+  (*         | Too_far -> aux visit_me visited nearest *)
+  (*         | Inserted nearest -> *)
+  (*           let visit_me = *)
+  (*             Graph.Neighbours.fold (Graph.adjacent graph visit_node) ~init:visit_me *)
+  (*               ~f:(fun visit_me node -> *)
+  (*                   if Graph.Visited.mem visited node then visit_me *)
+  (*                   else VisitMe.add visit_me node) *)
+  (*           in *)
+  (*           aux visit_me visited nearest *)
+  (*   in *)
+  (*   (\* let visit_me = Graph.VisitMe.singleton start_node in *\) *)
+  (*   let visited = Graph.Visited.create () in *)
+  (*   let nearest = Nearest.create hgraph target size_nearest in *)
+  (*   aux start_nodes visited nearest *)
+
+  (* let search_one hgraph graph start_nodes target size_nearest = *)
+  (*   (\* XXX this can be optimized: we do not need a priority queue for *)
+  (*      nearest *\) *)
+  (*   MinHeap.nearest target hgraph (Nearest.fold (search hgraph graph start_nodes target size_nearest)) *)
+
+  (*
+
+ SEARCH-LEVEL(hnsw, q, epSet, ef, l)
+1  visSet = epSet
+2  cQueue = MIN-PRIORITY-QUEUE(epSet) // key – distance to q
+3  wQueue = MAX-PRIORITY-QUEUE (epSet) // key – distance to q
+4  while cQueue.size > 0
+5    c = EXTRACT-MIN(cQueue)
+6    if DIST(c, q) > DIST(MAX(wQueue), q)
+7      break // all elements in the list are evaluated
+8    for each e ∈ hnsw.adj(c, l) // update cQueue and wQueue
+9      if e ∉ visSet
+10       visSet = visSet ∪ e
+11       if DIST(e, q) < DIST(MAX(wQueue), q)) or wQueue.size < ef
+12         INSERT(cQueue, e)
+13         INSERT(wQueue, e)
+14         if wQueue.size > ef
+15           EXTRACT-MAX(wQueue)
+16 resQueue = MIN-PRIORITY-QUEUE(wQueue) // key – distance to q
+17 return resQueue
+
+cQueue = visit_me
+wQueue = nearest
+
+*)
+
+  module Visited = Graph.Visited
+  module Neighbours = Graph.Neighbours
+  let distance = Distance.distance
+
+  let visited_of_visit_me visit_me =
+    VisitMe.fold visit_me ~init:(Visited.create ()) ~f:Visited.add
+
+  let visited_singleton node =
+    Visited.add (Visited.create ()) node
+ 
+  let nearest_of_visit_me hgraph visit_me size_nearest k =
+    VisitMe.fold visit_me ~init:(Nearest.create hgraph ~ef:size_nearest ~k)
+      ~f:(fun (nearest : Nearest.t) node ->
+          match Nearest.insert nearest node with
+          | Too_far -> nearest
+          | InsertedEf nearest | InsertedNotEf nearest -> nearest)
+    
+  let search (hgraph : Value.t) (graph : Graph.t) (start_nodes : VisitMe.t)
+      (target : Value.value) (size_nearest : int) (k : int) =
+    
+    let visit ((visit_me, nearest, visited) as acc) neighbour =
+      if Visited.mem visited neighbour then acc
+      else begin
+        let visited = Visited.add visited neighbour in
+        match Nearest.insert nearest neighbour with
+        | Too_far -> (visit_me, nearest, visited)
+        | InsertedNotEf nearest -> (visit_me, nearest, visited)
+        | InsertedEf nearest ->
+          let visit_me = VisitMe.add visit_me neighbour in
+          (visit_me, nearest, visited)
+      end
+    in
+    let rec aux visit_me nearest visited =
       match VisitMe.pop_nearest visit_me with
       | None -> nearest
-      | Some (visit_node, visit_me) ->
-        match Graph.Visited.visit visited visit_node with
-        | Already_visited -> aux visit_me visited nearest
-        | New_visit visited ->
-          match Nearest.insert nearest visit_node with
-          | Too_far -> aux visit_me visited nearest
-          | Inserted nearest ->
-            let visit_me =
-              Graph.Neighbours.fold (Graph.adjacent graph visit_node) ~init:visit_me
-                ~f:(fun visit_me node ->
-                    if Graph.Visited.mem visited node then visit_me
-                    else VisitMe.add visit_me node)
-            in
-            aux visit_me visited nearest
+      | Some (c, visit_me) ->
+        if Float.(distance (Value.value hgraph c) target > Nearest.max_distance nearest) then nearest
+        else begin
+          let visit_me, nearest, visited = Neighbours.fold (Graph.adjacent graph c)
+              ~init:(visit_me, nearest, visited)
+              ~f:visit
+          in aux visit_me nearest visited
+        end
     in
-    (* let visit_me = Graph.VisitMe.singleton start_node in *)
-    let visited = Graph.Visited.create () in
-    let nearest = Nearest.create hgraph target size_nearest in
-    aux start_nodes visited nearest
+    aux start_nodes (nearest_of_visit_me hgraph start_nodes size_nearest k) (visited_of_visit_me start_nodes)
 
-  let search_one hgraph graph start_nodes target size_nearest =
-    (* XXX this can be optimized: we do not need a priority queue for
-       nearest *)
-    MinHeap.nearest target hgraph (Nearest.fold (search hgraph graph start_nodes target size_nearest))
+  let search_one hgraph graph start_node target =
+
+    let visit ((visit_me, (nearest : Graph.node), visited) as acc) neighbour =
+      if Visited.mem visited neighbour then acc
+      else begin
+        let visited = Visited.add visited neighbour in
+        if Float.(distance (Value.value hgraph neighbour) target >=
+                  distance (Value.value hgraph nearest) target) then
+          (visit_me, nearest, visited)
+        else
+          let visit_me = VisitMe.add visit_me neighbour in
+          (visit_me, nearest, visited)
+      end
+    in
+    let rec aux visit_me (nearest : Graph.node) visited =
+      match VisitMe.pop_nearest visit_me with
+      | None -> nearest
+      | Some (c, visit_me) ->
+        if Float.(distance (Value.value hgraph c) target >
+                  distance (Value.value hgraph nearest) target) then nearest
+        else begin
+          let visit_me, nearest, visited = Neighbours.fold (Graph.adjacent graph c)
+              ~init:(visit_me, nearest, visited)
+              ~f:visit
+          in aux visit_me nearest visited
+        end
+    in aux (VisitMe.singleton hgraph target start_node) start_node (visited_singleton start_node)
 end
 
 module type HGRAPH = sig
@@ -315,7 +426,7 @@ module type HGRAPH = sig
 
   val value : t -> node -> value
   (* val distance : value -> value -> float *)
-  
+
   val create : unit -> t
   val layer : t -> int -> LayerGraph.t
 
@@ -458,21 +569,21 @@ Notes:
   to 42, and the start node is the newly inserted node
 
  *)
-  
+
   let insert hgraph point ~num_neighbours ~max_num_neighbours ~max_num_neighbours0
       ~num_neighbours_search ~level_mult =
 
     let num_neighbours_search_above = 1 in (*  efOne  *)
-    
+
     let insert_in_layer_no_neighbours hgraph i_layer value =
       let hgraph, node = Hgraph.allocate hgraph value in
       Hgraph.set_connections hgraph i_layer node (Layer.Neighbours.create ())
     in
-    
+
     if Hgraph.is_empty hgraph then insert_in_layer_no_neighbours hgraph 0 point else
       let hgraph, point_node = Hgraph.allocate hgraph point in
       let level = Int.of_float @@ Float.round_nearest @@ -. (Float.log (Random.float 1.)) *. level_mult in
-      
+
       let rec aux (hgraph : Hgraph.t) (i_layer : int) (start_nodes : VisitMe.t) =
         if i_layer < 0 then hgraph, start_nodes else begin
           let layer_graph = Hgraph.layer hgraph i_layer in
