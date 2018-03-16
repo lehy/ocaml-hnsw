@@ -17,12 +17,13 @@ module Hgraph(Distance : DISTANCE) = struct
     module Visited = struct
       type t = Set.M(Int).t [@@deriving sexp]
       let create () = Set.empty (module Int)
-      type visit = Already_visited | New_visit of t
-      let visit visited node =
-        let new_visited = Set.add visited node in
-        if phys_equal new_visited visited then Already_visited
-        else New_visit new_visited
+      (* type visit = Already_visited | New_visit of t *)
+      (* let visit visited node = *)
+      (*   let new_visited = Set.add visited node in *)
+      (*   if phys_equal new_visited visited then Already_visited *)
+      (*   else New_visit new_visited *)
       let mem visited node = Set.mem visited node
+      let add visited node = Set.add visited node
     end
 
     module Neighbours = struct
@@ -57,19 +58,6 @@ module Hgraph(Distance : DISTANCE) = struct
     (*   Map.for_alli x.connections ~f:(fun ~key ~data -> *)
     (*       Map.mem x.values key && Neighbours.for_all data ~f:(Map.mem x.values)) *)
 
-    (*  XXX code duplication!  *)
-    (* exception Value_not_found of string *)
-    (* let value g node = *)
-    (*   match Map.find g.values node with *)
-    (*   | None -> raise (Value_not_found (Printf.sprintf "node: %s\nvalues:\n%s\nconnections:\n%s" *)
-    (*                                       (Sexp.to_string_hum (sexp_of_node node)) *)
-    (*                                       (Sexp.to_string_hum *)
-    (*                                          ([%sexp_of : Map.M(Int).t] sexp_of_value g.values)) *)
-    (*                                       (Sexp.to_string_hum *)
-    (*                                          ([%sexp_of : Map.M(Int).t] Neighbours.sexp_of_t g.connections)))) *)
-    (*   | Some node -> node *)
-    (* Map.find_exn g.values node *)
-    (* Map.find_exn g.values node *)
 
     let create values =
       { (* values; *)
@@ -160,6 +148,29 @@ module Hgraph(Distance : DISTANCE) = struct
     next_available_node : int
   } [@@deriving sexp]
 
+  module Stats = struct
+    type mima = { min : int; max : int; mean : float} [@@deriving sexp]
+    type t = {
+      num_nodes : int;
+      layer_sizes : int Map.M(Int).t;
+      layer_connectivity : mima Map.M(Int).t
+    } [@@deriving sexp]
+
+    let min_max_connectivity g =
+      let mi, ma, n, sum =
+        Map.fold g.LayerGraph.connections ~init:(1000000, -1, 0, 0.) ~f:(fun ~key ~data (mi, ma, n, sum) ->
+            let num_neighbours = LayerGraph.Neighbours.length data in
+            (min num_neighbours mi, max num_neighbours ma, n+1, sum+.Float.of_int num_neighbours))
+      in { min=mi; max=ma; mean= sum /. Float.of_int n }
+    
+    let compute hgraph =
+      {
+        num_nodes = Map.length hgraph.values;
+        layer_sizes = Map.map hgraph.layers ~f:(fun layer -> Map.length layer.connections);
+        layer_connectivity = Map.map hgraph.layers ~f:min_max_connectivity
+      }
+  end
+  
   exception Value_not_found of string
   let value h node =
     Map.find_exn h.values node
@@ -233,7 +244,7 @@ end
 (*   let value g n = Hgraph.value g n *)
 (* end *)
 
-module Nearest(Distance : DISTANCE) = struct
+module NearestOne(Distance : DISTANCE) = struct
   module Hgraph = Hgraph(Distance)
   type t_value_computer = Hgraph.t [@@deriving sexp]
   type node = Hgraph.node [@@deriving sexp]
@@ -261,12 +272,61 @@ module Nearest(Distance : DISTANCE) = struct
     let size = length q in
     if size < q.max_size then
       Inserted { q with max_priority_queue = MaxHeap.add q.max_priority_queue new_element; size=q.size+1 }
-    else if not @@ MaxHeap.Element.is_further new_element (Option.value_exn (MaxHeap.max q.max_priority_queue)) then
-      let new_heap = MaxHeap.add q.max_priority_queue new_element |> MaxHeap.remove_max in
-      Inserted { q with max_priority_queue = new_heap }
-    else Too_far
+    else begin match MaxHeap.max q.max_priority_queue with
+      | None -> Too_far
+      | Some max_element ->
+        if not @@ MaxHeap.Element.is_further new_element max_element
+        then
+          let new_heap = MaxHeap.add q.max_priority_queue new_element |> MaxHeap.remove_max in
+          Inserted { q with max_priority_queue = new_heap }
+        else Too_far
+    end
   let fold x ~init ~f = MaxHeap.fold x.max_priority_queue ~init ~f:(fun acc e -> f acc e.node)
   let fold_distance x ~init ~f = MaxHeap.fold x.max_priority_queue ~init ~f:(fun acc e -> f acc e)
+  let max_distance x =
+    match MaxHeap.max x.max_priority_queue with
+    | Some e -> e.Hnsw_algo.distance_to_target
+    | None -> Float.neg_infinity
+
+  let fold_far_to_near x ~init ~f =
+    MaxHeap.fold_far_to_near_until x.max_priority_queue ~init ~f:(fun acc e -> MaxHeap.Continue (f acc e))
+end
+
+module Nearest(Distance : DISTANCE) = struct
+  module N = NearestOne(Distance)
+  type t = {
+    (* XXX This is a reasonable repr if k > ef. For k <= ef, we could
+       keep only one heap. (Not sure it matters highly.) *)
+    ef : N.t;
+    k : N.t
+  } [@@deriving sexp]
+  type value = N.value [@@deriving sexp]
+  type node = N.node [@@deriving sexp]
+  type t_value_computer = N.t_value_computer [@@deriving sexp]
+    
+  let create value_computer target ~ef ~k =
+    {
+      ef = N.create value_computer target ef;
+      k = N.create value_computer target k
+    }
+  let target n = N.target n.ef
+  let value_computer n = N.value_computer n.ef
+  
+  type insert = Too_far | InsertedEf of t | InsertedNotEf of t
+  let insert n node =
+    match N.insert n.ef node, N.insert n.k node with
+    | Too_far, Too_far -> Too_far
+    | Inserted ef, Inserted k -> InsertedEf { ef; k }
+    | Inserted ef, Too_far -> InsertedEf { ef; k=n.k }
+    | Too_far, Inserted k -> InsertedNotEf { ef=n.ef; k }
+  let fold_ef n ~init ~f =
+    N.fold n.ef ~init ~f
+  let fold_ef_distance n ~init ~f =
+    N.fold_distance n.ef ~init ~f
+  let max_distance_ef n =
+    N.max_distance n.ef
+  let nearest_k n =
+    N.fold_far_to_near n.k ~init:[] ~f:(fun acc e -> e::acc)
 end
 
 module VisitMe(Distance : DISTANCE) = struct
@@ -288,7 +348,7 @@ module VisitMe(Distance : DISTANCE) = struct
   let of_nearest nearest =
     { target = Nearest.target nearest;
       value_computer = Nearest.value_computer nearest;
-      heap = Nearest.fold_distance nearest ~init:(MinHeap.create ()) ~f:(fun h e ->
+      heap = Nearest.fold_ef_distance nearest ~init:(MinHeap.create ()) ~f:(fun h e ->
           MinHeap.add h { node = e.node; distance_to_target = e.distance_to_target }) }
   let nearest (v : t) =
     match MinHeap.min v.heap with
@@ -300,6 +360,8 @@ module VisitMe(Distance : DISTANCE) = struct
     | Some (n, h) -> Some (n.node, { v with heap = h })
   let add (v : t) node =
     { v with heap = MinHeap.add v.heap (MinHeap.Element.of_node v.target v.value_computer node) }
+  let fold v ~init ~f =
+    MinHeap.fold v.heap ~init ~f:(fun acc (element : _ Hnsw_algo.value_distance) -> f acc element.node)
 end
 
 (* module EuclideanDistanceArray = struct *)
@@ -409,9 +471,10 @@ module MakeSimple(Distance : DISTANCE) = struct
     let max_num_neighbours0 = 2 * num_neighbours in
     let level_mult = 1. /. Float.log (Float.of_int num_neighbours) in
     Build.create fold_rows
-      ~num_neighbours ~max_num_neighbours0 ~num_neighbours_search:num_neighbours_build ~level_mult
+      ~num_neighbours ~max_num_neighbours:num_neighbours ~max_num_neighbours0
+      ~num_neighbours_search:num_neighbours_build ~level_mult
 
-  let knn (hgraph : t) (point : value) ?(num_neighbours_search=5) num_neighbours =
+  let knn (hgraph : t) (point : value) ~num_neighbours_search ~num_neighbours =
     Knn.knn hgraph point ~num_neighbours ~num_neighbours_search
 end
 
@@ -434,10 +497,10 @@ module Make(Batch : BATCH) = struct
   let build_batch ?(num_neighbours=5) ?(num_neighbours_build=100) data =
     build ~num_neighbours ~num_neighbours_build (Batch.fold data)
 
-  let knn_batch hgraph batch ?num_neighbours_search num_neighbours =
+  let knn_batch hgraph batch ~num_neighbours_search ~num_neighbours =
     let distances = Batch.Distances.create ~len_batch:(Batch.length batch) ~num_neighbours in
     let _ = Batch.fold batch ~init:1 ~f:(fun i row ->
-        let neighbours = knn hgraph row ?num_neighbours_search num_neighbours in
+        let neighbours = knn hgraph row ~num_neighbours_search ~num_neighbours in
         Batch.Distances.set distances i neighbours;
         i + 1) in
     distances
