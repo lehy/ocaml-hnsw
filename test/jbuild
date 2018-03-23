@@ -2,7 +2,7 @@
 
 (executable
  ((name            test)
-  (libraries       (hnsw base stdio))
+  (libraries       (hnsw base stdio lacaml))
   (preprocess (pps (ppx_jane)))))
 
 (alias

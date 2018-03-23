@@ -196,14 +196,18 @@ module Hgraph(Distance : DISTANCE) = struct
     | None -> LayerGraph.create hgraph.values
 
   let max_layer hgraph = hgraph.max_layer
-  let set_max_layer hgraph m = { hgraph with max_layer = m }
+  let set_max_layer hgraph m =
+    { hgraph with max_layer = m;
+                  layers = Map.set hgraph.layers m (layer hgraph m) }
 
   (* Not well defined when the graph is empty, and no check that the
      entry point is an actual node. However the neighbour sets should
      be returned as empty if the node is not found, so maybe this is
      not a problem. *)
   let entry_point h = h.entry_point
-  let set_entry_point h p = { h with entry_point = p }
+  let set_entry_point h p =
+    printf "setting entry point: %d\n%!" p;
+    { h with entry_point = p }
 
   let allocate_node h =
     h.next_available_node, { h with next_available_node = h.next_available_node+1 }
@@ -296,7 +300,8 @@ module Nearest(Distance : DISTANCE) = struct
   module N = NearestOne(Distance)
   type t = {
     (* XXX This is a reasonable repr if k > ef. For k <= ef, we could
-       keep only one heap. (Not sure it matters highly.) *)
+       keep only one heap. (Not sure it matters highly.)
+    *)
     ef : N.t;
     k : N.t
   } [@@deriving sexp]
@@ -314,6 +319,8 @@ module Nearest(Distance : DISTANCE) = struct
   
   type insert = Too_far | InsertedEf of t | InsertedNotEf of t
   let insert n node =
+    (* XXX the distance to target is computed twice here, we should
+       share it *)
     match N.insert n.ef node, N.insert n.k node with
     | Too_far, Too_far -> Too_far
     | Inserted ef, Inserted k -> InsertedEf { ef; k }
@@ -328,6 +335,8 @@ module Nearest(Distance : DISTANCE) = struct
   let nearest_k n =
     N.fold_far_to_near n.k ~init:[] ~f:(fun acc e -> e::acc)
 end
+
+type 'a value_distance = 'a Hnsw_algo.value_distance [@@deriving sexp]
 
 module VisitMe(Distance : DISTANCE) = struct
   module Hgraph = Hgraph(Distance)
@@ -512,7 +521,7 @@ module Ba = struct
     type t = Lacaml.S.mat
     let list_of_bigarray v =
       let acc = ref [] in
-      for i = 0 to Bigarray.Array1.dim v - 1 do
+      for i = 1 to Bigarray.Array1.dim v do
         acc := v.{i}::!acc
       done;
       List.rev !acc
@@ -523,7 +532,7 @@ module Ba = struct
 
     let fold ba ~init ~f =
       let n = Bigarray.Array2.dim2 ba in
-      let k_print = n / 100 in
+      let k_print = max (n / 100) 1 in
       let acc = ref init in
       for i = 1 to n do
         if i % k_print = 0 then begin
