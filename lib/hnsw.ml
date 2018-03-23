@@ -248,7 +248,9 @@ end
 (*   let value g n = Hgraph.value g n *)
 (* end *)
 
-module NearestOne(Distance : DISTANCE) = struct
+type 'a value_distance = 'a Hnsw_algo.value_distance [@@deriving sexp]
+
+module Nearest(Distance : DISTANCE) = struct
   module Hgraph = Hgraph(Distance)
   type t_value_computer = Hgraph.t [@@deriving sexp]
   type node = Hgraph.node [@@deriving sexp]
@@ -265,26 +267,31 @@ module NearestOne(Distance : DISTANCE) = struct
   let value_computer x = x.value_computer
   let target x = x.target
 
-  let create value_computer target max_size =
-    { value_computer; target; size=0; max_size; max_priority_queue=MaxHeap.create () }
+  let create value_computer target ~ef =
+    { value_computer; target; size=0; max_size=ef; max_priority_queue=MaxHeap.create () }
 
   let length q = q.size
 
   type insert = Too_far | Inserted of t
-  let insert q node =
-    let new_element = MaxHeap.Element.of_node q.target q.value_computer node in
+
+  let insert_distance q (element : node value_distance) =
     let size = length q in
     if size < q.max_size then
-      Inserted { q with max_priority_queue = MaxHeap.add q.max_priority_queue new_element; size=q.size+1 }
+      Inserted { q with max_priority_queue = MaxHeap.add q.max_priority_queue element; size=q.size+1 }
     else begin match MaxHeap.max q.max_priority_queue with
       | None -> Too_far
       | Some max_element ->
-        if not @@ MaxHeap.Element.is_further new_element max_element
+        if not @@ MaxHeap.Element.is_further element max_element
         then
-          let new_heap = MaxHeap.add q.max_priority_queue new_element |> MaxHeap.remove_max in
+          let new_heap = MaxHeap.add q.max_priority_queue element |> MaxHeap.remove_max in
           Inserted { q with max_priority_queue = new_heap }
         else Too_far
     end
+
+  (* let insert q node = *)
+  (*   let new_element = MaxHeap.Element.of_node q.target q.value_computer node in *)
+  (*   insert_distance q new_element *)
+  
   let fold x ~init ~f = MaxHeap.fold x.max_priority_queue ~init ~f:(fun acc e -> f acc e.node)
   let fold_distance x ~init ~f = MaxHeap.fold x.max_priority_queue ~init ~f:(fun acc e -> f acc e)
   let max_distance x =
@@ -294,49 +301,62 @@ module NearestOne(Distance : DISTANCE) = struct
 
   let fold_far_to_near x ~init ~f =
     MaxHeap.fold_far_to_near_until x.max_priority_queue ~init ~f:(fun acc e -> MaxHeap.Continue (f acc e))
+
+  let nearest_k n k =
+    let ret,_ =
+      fold_far_to_near n ~init:([], 0) ~f:(fun (acc, m) e -> if m < k then (e::acc, m+1) else (acc, m))
+    in ret
 end
 
-module Nearest(Distance : DISTANCE) = struct
-  module N = NearestOne(Distance)
-  type t = {
-    (* XXX This is a reasonable repr if k > ef. For k <= ef, we could
-       keep only one heap. (Not sure it matters highly.)
-    *)
-    ef : N.t;
-    k : N.t
-  } [@@deriving sexp]
-  type value = N.value [@@deriving sexp]
-  type node = N.node [@@deriving sexp]
-  type t_value_computer = N.t_value_computer [@@deriving sexp]
-    
-  let create value_computer target ~ef ~k =
-    {
-      ef = N.create value_computer target ef;
-      k = N.create value_computer target k
-    }
-  let target n = N.target n.ef
-  let value_computer n = N.value_computer n.ef
-  
-  type insert = Too_far | InsertedEf of t | InsertedNotEf of t
-  let insert n node =
-    (* XXX the distance to target is computed twice here, we should
-       share it *)
-    match N.insert n.ef node, N.insert n.k node with
-    | Too_far, Too_far -> Too_far
-    | Inserted ef, Inserted k -> InsertedEf { ef; k }
-    | Inserted ef, Too_far -> InsertedEf { ef; k=n.k }
-    | Too_far, Inserted k -> InsertedNotEf { ef=n.ef; k }
-  let fold_ef n ~init ~f =
-    N.fold n.ef ~init ~f
-  let fold_ef_distance n ~init ~f =
-    N.fold_distance n.ef ~init ~f
-  let max_distance_ef n =
-    N.max_distance n.ef
-  let nearest_k n =
-    N.fold_far_to_near n.k ~init:[] ~f:(fun acc e -> e::acc)
-end
+(* module Nearest(Distance : DISTANCE) = struct *)
+(*   module N = NearestOne(Distance) *)
+(*   type t = { *)
+(*     (\* XXX This is a reasonable repr if k > ef. For k <= ef, we could *)
+(*        keep only one heap. (Not sure it matters highly.) *)
+(*     *\) *)
+(*     ef : N.t; *)
+(*     k : N.t *)
+(*   } [@@deriving sexp] *)
+(*   type value = N.value [@@deriving sexp] *)
+(*   type node = N.node [@@deriving sexp] *)
+(*   type t_value_computer = N.t_value_computer [@@deriving sexp] *)
 
-type 'a value_distance = 'a Hnsw_algo.value_distance [@@deriving sexp]
+(*   let create value_computer target ~ef ~k = *)
+(*     { *)
+(*       ef = N.create value_computer target ef; *)
+(*       k = N.create value_computer target k *)
+(*     } *)
+(*   let target n = N.target n.ef *)
+(*   let value_computer n = N.value_computer n.ef *)
+
+(*   type insert = Too_far | InsertedEf of t | InsertedNotEf of t *)
+
+(*   let insert_distance n (node : node value_distance) = *)
+(*     match N.insert_distance n.ef node, N.insert_distance n.k node with *)
+(*     | Too_far, Too_far -> Too_far *)
+(*     | Inserted ef, Inserted k -> InsertedEf { ef; k } *)
+(*     | Inserted ef, Too_far -> InsertedEf { ef; k=n.k } *)
+(*     | Too_far, Inserted k -> InsertedNotEf { ef=n.ef; k } *)
+
+(*   (\* let insert n node = *\) *)
+(*   (\*   (\\* XXX the distance to target is computed twice here, we should *\) *)
+(*   (\*      share it *\\) *\) *)
+(*   (\*   (\\*  XXX can we remove this?  *\\) *\) *)
+(*   (\*   match N.insert n.ef node, N.insert n.k node with *\) *)
+(*   (\*   | Too_far, Too_far -> Too_far *\) *)
+(*   (\*   | Inserted ef, Inserted k -> InsertedEf { ef; k } *\) *)
+(*   (\*   | Inserted ef, Too_far -> InsertedEf { ef; k=n.k } *\) *)
+(*   (\*   | Too_far, Inserted k -> InsertedNotEf { ef=n.ef; k } *\) *)
+
+(*   let fold_ef n ~init ~f = *)
+(*     N.fold n.ef ~init ~f *)
+(*   let fold_ef_distance n ~init ~f = *)
+(*     N.fold_distance n.ef ~init ~f *)
+(*   let max_distance_ef n = *)
+(*     N.max_distance n.ef *)
+(*   let nearest_k n = *)
+(*     N.fold_far_to_near n.k ~init:[] ~f:(fun acc e -> e::acc) *)
+(* end *)
 
 module VisitMe(Distance : DISTANCE) = struct
   module Hgraph = Hgraph(Distance)
@@ -350,14 +370,14 @@ module VisitMe(Distance : DISTANCE) = struct
   type node = Hgraph.node
   type nearest = Nearest.t
 
-  let singleton value_computer target n =
+  let singleton value_computer target element =
     { target; value_computer;
-      heap = MinHeap.singleton (MinHeap.Element.of_node target value_computer n) }
+      heap = MinHeap.singleton element } (* (MinHeap.Element.of_node target value_computer n) } *)
 
   let of_nearest nearest =
     { target = Nearest.target nearest;
       value_computer = Nearest.value_computer nearest;
-      heap = Nearest.fold_ef_distance nearest ~init:(MinHeap.create ()) ~f:(fun h e ->
+      heap = Nearest.fold_distance nearest ~init:(MinHeap.create ()) ~f:(fun h e ->
           MinHeap.add h { node = e.node; distance_to_target = e.distance_to_target }) }
   let nearest (v : t) =
     match MinHeap.min v.heap with
@@ -366,9 +386,11 @@ module VisitMe(Distance : DISTANCE) = struct
   let pop_nearest (v : t) =
     match MinHeap.pop_min v.heap with
     | None -> None
-    | Some (n, h) -> Some (n.node, { v with heap = h })
-  let add (v : t) node =
-    { v with heap = MinHeap.add v.heap (MinHeap.Element.of_node v.target v.value_computer node) }
+    | Some (n, h) -> Some (n, { v with heap = h })
+  (* let add (v : t) node = *)
+  (*   { v with heap = MinHeap.add v.heap (MinHeap.Element.of_node v.target v.value_computer node) } *)
+  let add_distance (v : t) (element : node value_distance) =
+    { v with heap = MinHeap.add v.heap element }
   let fold v ~init ~f =
     MinHeap.fold v.heap ~init ~f:(fun acc (element : _ Hnsw_algo.value_distance) -> f acc element.node)
 end

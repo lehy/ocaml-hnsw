@@ -137,7 +137,7 @@ let main () =
   let data = Dataset.read "fashion-mnist-784-euclidean.hdf5" ~limit:5000  in
   printf "read dataset: %s\n" (Sexp.to_string_hum @@ Dataset.sexp_of_t data);
   let t0 = Unix.gettimeofday () in
-  let hgraph = Hnsw.Ba.build_batch ~num_neighbours:5 ~num_neighbours_build:100 data.train in
+  let hgraph = Hnsw.Ba.build_batch ~num_neighbours:10 ~num_neighbours_build:400 data.train in
   let t1 = Unix.gettimeofday () in
   printf "index construction: %f s\n%!" (t1-.t0);
   let stats = Hnsw.Ba.Hgraph.Stats.compute hgraph in
@@ -145,7 +145,7 @@ let main () =
   
   let num_neighbours = Bigarray.Array2.dim1 data.test_distances in
   let got_distances =
-    Hnsw.Ba.knn_batch hgraph data.test ~num_neighbours ~num_neighbours_search:5
+    Hnsw.Ba.knn_batch hgraph data.test ~num_neighbours ~num_neighbours_search:num_neighbours
   in
   let t2 = Unix.gettimeofday () in
   let num_queries = Bigarray.Array2.dim2 data.test |> Float.of_int in
@@ -156,3 +156,14 @@ let main () =
   ();;
 
 main ();;
+
+(*  TODO:
+- optimize index creation (Nearest.fold to MinHeap: pass MinHeap directly to SelectNeighbours)
+- find a way to profile the thing:
+    + perf record / perf report seem to work!
+    + hotpoints:
+      - Map.find (probably values + neighbours) -> convert values to just our Bigarray
+      - Set.fold -> convert sets to lists?
+    + try to benchmark index creation and querying separately
+    
+*)
