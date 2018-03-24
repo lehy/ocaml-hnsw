@@ -60,7 +60,7 @@ module Dataset = struct
 
     (*  test vectors  *)
     test : Lacaml.S.mat; (* (float, Bigarray.float32_elt, Bigarray.c_layout) Bigarray.Array2.t; *)
-    
+
     (*  for each test vector, distances of the true n nearest neighbours *)
     test_distances : Lacaml.S.mat; (* (float, Bigarray.float32_elt, Bigarray.c_layout) Bigarray.Array2.t; *)
 
@@ -81,9 +81,9 @@ module Dataset = struct
         distance=d.distance
       }
   end
-  
+
   let sexp_of_t t = Sexp_of_t.of_dataset t |> Sexp_of_t.sexp_of_t
-  
+
   let read ?limit f =
     let data = H5.open_rdonly ("../../../data/" ^ f) in
     (* printf "%s: %s\n" f (Sexp.to_string_hum @@ [%sexp_of : string list] @@ H5.ls data); *)
@@ -133,17 +133,23 @@ module Recall = struct
     !ret /. (Float.of_int num_queries)
 end
 
-let main () =
+let read_data () =
   let data = Dataset.read "fashion-mnist-784-euclidean.hdf5" ~limit:5000  in
   printf "read dataset: %s\n" (Sexp.to_string_hum @@ Dataset.sexp_of_t data);
+  data
+
+let build_index data =
   let t0 = Unix.gettimeofday () in
-  let hgraph = Hnsw.Ba.build_batch ~num_neighbours:10 ~num_neighbours_build:400 data.train in
+  let hgraph = Hnsw.Ba.build_batch ~num_neighbours:10 ~num_neighbours_build:400 data.Dataset.train in
   let t1 = Unix.gettimeofday () in
   printf "index construction: %f s\n%!" (t1-.t0);
   let stats = Hnsw.Ba.Hgraph.Stats.compute hgraph in
   printf "index stats: %s\n%!" (Sexp.to_string_hum @@ Hnsw.Ba.Hgraph.Stats.sexp_of_t stats);
-  
+  hgraph
+
+let test (data : Dataset.t) hgraph =
   let num_neighbours = Bigarray.Array2.dim1 data.test_distances in
+  let t1 = Unix.gettimeofday () in
   let got_distances =
     Hnsw.Ba.knn_batch hgraph data.test ~num_neighbours ~num_neighbours_search:num_neighbours
   in
@@ -152,18 +158,26 @@ let main () =
   printf "query: %f s, %f q/s, %f s/q\n%!"
     (t2-.t1) (num_queries/.(t2-.t1)) ((t2-.t1)/.num_queries);
   let recall = Recall.compute data.test_distances got_distances in
-  printf "recall: %f\n" recall;
-  ();;
+  printf "recall: %f\n" recall;;
+
+
+let main () =
+  let data = read_data () in
+  let hgraph = build_index data in
+  match Caml.Sys.argv.(1) with
+  | "index" -> ()
+  | _ -> test data hgraph
+  | exception _ -> test data hgraph;;
 
 main ();;
 
 (*  TODO:
-- optimize index creation (Nearest.fold to MinHeap: pass MinHeap directly to SelectNeighbours)
-- find a way to profile the thing:
+    - optimize index creation (Nearest.fold to MinHeap: pass MinHeap directly to SelectNeighbours)
+    - find a way to profile the thing:
     + perf record / perf report seem to work!
     + hotpoints:
       - Map.find (probably values + neighbours) -> convert values to just our Bigarray
       - Set.fold -> convert sets to lists?
     + try to benchmark index creation and querying separately
-    
+
 *)
