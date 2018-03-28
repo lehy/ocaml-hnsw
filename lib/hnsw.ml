@@ -6,139 +6,146 @@ module type DISTANCE = sig
   val distance : value -> value -> float
 end
 
+module MapGraph = struct
+  (* type nonrec node = node [@@deriving sexp] *)
+  (* type nonrec value = value [@@deriving sexp] *)
+  type node = int [@@deriving sexp]
+  
+  module Visited = struct
+    type t = Set.M(Int).t [@@deriving sexp]
+    let create () = Set.empty (module Int)
+    (* type visit = Already_visited | New_visit of t *)
+    (* let visit visited node = *)
+    (*   let new_visited = Set.add visited node in *)
+    (*   if phys_equal new_visited visited then Already_visited *)
+    (*   else New_visit new_visited *)
+    let mem visited node = Set.mem visited node
+    let add visited node = Set.add visited node
+  end
+
+  module Neighbours = struct
+    (* gah! I wish I knew how to just say module Neighbours = Set
+       with type t = Set.M(Int) or whatever *)
+    type t = Set.M(Int).t [@@deriving sexp]
+    (* type nonrec node = node *)
+
+    let create () = Set.empty (module Int)
+    let add n node = Set.add n node
+    let length c = Set.length c
+    let for_all n ~f = Set.for_all n ~f
+    let fold c ~init ~f =
+      Set.fold c ~init ~f
+
+    let diff a b =
+      Set.diff a b
+
+    let union a b = Set.union a b
+    let for_all x ~f = Set.for_all x ~f
+  end
+
+  type t = {
+    (* values : value Map.M(Int).t; *)
+    connections : Neighbours.t Map.M(Int).t;
+    (* next_available_node : int *)
+  } [@@deriving sexp]
+
+  (*  XXX TODO: check symmetric  *)
+  let invariant x = true
+  (* let invariant x = *)
+  (*   Map.for_alli x.connections ~f:(fun ~key ~data -> *)
+  (*       Map.mem x.values key && Neighbours.for_all data ~f:(Map.mem x.values)) *)
+
+
+  let create () =
+    { (* values; *)
+      connections = Map.empty (module Int);
+      (* next_available_node = 0 *) }
+
+  let fold_neighbours g node ~init ~f =
+    match Map.find g.connections node with
+    | None -> init
+    | Some neighbours ->
+      Set.fold neighbours ~init ~f
+
+  (* let distance a b = Distance.distance a b *)
+
+  let adjacent g node =
+    match Map.find g.connections node with
+    | None -> Set.empty (module Int)
+    | Some neighbours -> neighbours
+
+  let connect_symmetric g node neighbours =
+    (* assert (invariant g); *)
+    (* assert (Neighbours.for_all neighbours ~f:(Map.mem g.values)); *)
+    (* assert (Map.mem g.values node); *)
+    let connections = Map.set g.connections node neighbours in
+    let g =
+      { connections = Neighbours.fold neighbours ~init:connections
+            ~f:(fun connections neighbour ->
+                let neighbours_of_neighbour = match Map.find connections neighbour with
+                  | None -> Set.singleton (module Int) node
+                  | Some old_neighbours -> Set.add old_neighbours node
+                in
+                Map.set connections neighbour neighbours_of_neighbour) }
+    in
+    (* assert (invariant g); *)
+    g
+
+  (* let insert g value neighbours = *)
+  (*   let connect_symmetric connections node neighbours = *)
+  (*     let connections = Map.set connections node neighbours in *)
+  (*     Neighbours.fold neighbours ~init:connections ~f:(fun connections neighbour -> *)
+  (*         let neighbours_of_neighbour = match Map.find connections neighbour with *)
+  (*           | None -> Set.singleton (module Int) node *)
+  (*           | Some old_neighbours -> Set.add old_neighbours node *)
+  (*         in *)
+  (*         Map.set connections neighbour neighbours_of_neighbour) *)
+  (*   in *)
+  (*   TODO *)
+  (*     solve the node registry problem: *)
+  (*     maybe the layergraph abstraction does not work? how to insert a node in there? *)
+  (*     inserting a node into the layergraph should modify the hgraph as well (since it holds values) *)
+  (*   { (\* values = Map.set g.values g.next_available_node value; *\) *)
+  (*     connections = connect_symmetric g.connections g.next_available_node neighbours; *)
+  (*     (\* next_available_node = g.next_available_node + 1 *\) } *)
+
+  let add_neighbours g node added_neighbours =
+    (* let connections = Map.set g.connections node (Neighbours.union (adjacent g node) added_neighbours) in *)
+    let connections = Map.update g.connections node (function
+        | None -> added_neighbours
+        | Some old_neighbours -> Neighbours.union old_neighbours added_neighbours) in
+    let connections = Neighbours.fold added_neighbours ~init:connections
+        ~f:(fun connections added_neighbour ->
+            Map.update connections added_neighbour ~f:(function
+                | None -> Set.singleton (module Int) node
+                | Some old -> Set.add old node))
+    in let g = { connections } in
+    (* assert (invariant g); *)
+    g
+
+  let remove_neighbours g node removed_neighbours =
+    let connections = Map.update g.connections node (function
+        | None -> Neighbours.create ()
+        | Some old -> Neighbours.diff old removed_neighbours) in
+    let connections = Neighbours.fold removed_neighbours ~init:connections
+        ~f:(fun connections removed_neighbour ->
+            Map.update connections removed_neighbour ~f:(function
+                | None -> Set.empty (module Int)
+                | Some old -> Set.remove old node))
+    in let g = { connections } in
+    (* assert (invariant g); *)
+    g
+end
+
 module Hgraph(Distance : DISTANCE) = struct
   type node = int [@@deriving sexp]
   type value = Distance.value [@@deriving sexp]
 
-  module LayerGraph = struct
-    type nonrec node = node [@@deriving sexp]
-    type nonrec value = value [@@deriving sexp]
-
-    module Visited = struct
-      type t = Set.M(Int).t [@@deriving sexp]
-      let create () = Set.empty (module Int)
-      (* type visit = Already_visited | New_visit of t *)
-      (* let visit visited node = *)
-      (*   let new_visited = Set.add visited node in *)
-      (*   if phys_equal new_visited visited then Already_visited *)
-      (*   else New_visit new_visited *)
-      let mem visited node = Set.mem visited node
-      let add visited node = Set.add visited node
-    end
-
-    module Neighbours = struct
-      (* gah! I wish I knew how to just say module Neighbours = Set
-         with type t = Set.M(Int) or whatever *)
-      type t = Set.M(Int).t [@@deriving sexp]
-      type nonrec node = node
-
-      let create () = Set.empty (module Int)
-      let add n node = Set.add n node
-      let length c = Set.length c
-      let for_all n ~f = Set.for_all n ~f
-      let fold c ~init ~f =
-        Set.fold c ~init ~f
-
-      let diff a b =
-        Set.diff a b
-
-      let union a b = Set.union a b
-      let for_all x ~f = Set.for_all x ~f
-    end
-
-    type t = {
-      (* values : value Map.M(Int).t; *)
-      connections : Neighbours.t Map.M(Int).t;
-      (* next_available_node : int *)
-    } [@@deriving sexp]
-
-    (*  XXX TODO: check symmetric  *)
-    let invariant x = true
-    (* let invariant x = *)
-    (*   Map.for_alli x.connections ~f:(fun ~key ~data -> *)
-    (*       Map.mem x.values key && Neighbours.for_all data ~f:(Map.mem x.values)) *)
-
-
-    let create values =
-      { (* values; *)
-        connections = Map.empty (module Int);
-        (* next_available_node = 0 *) }
-
-    let fold_neighbours g node ~init ~f =
-      match Map.find g.connections node with
-      | None -> init
-      | Some neighbours ->
-        Set.fold neighbours ~init ~f
-
-    let distance a b = Distance.distance a b
-
-    let adjacent g node =
-      match Map.find g.connections node with
-      | None -> Set.empty (module Int)
-      | Some neighbours -> neighbours
-
-    let connect_symmetric g node neighbours =
-      assert (invariant g);
-      (* assert (Neighbours.for_all neighbours ~f:(Map.mem g.values)); *)
-      (* assert (Map.mem g.values node); *)
-      let connections = Map.set g.connections node neighbours in
-      let g =
-        { connections = Neighbours.fold neighbours ~init:connections
-              ~f:(fun connections neighbour ->
-                  let neighbours_of_neighbour = match Map.find connections neighbour with
-                    | None -> Set.singleton (module Int) node
-                    | Some old_neighbours -> Set.add old_neighbours node
-                  in
-                  Map.set connections neighbour neighbours_of_neighbour) }
-      in
-      assert (invariant g);
-      g
-
-    (* let insert g value neighbours = *)
-    (*   let connect_symmetric connections node neighbours = *)
-    (*     let connections = Map.set connections node neighbours in *)
-    (*     Neighbours.fold neighbours ~init:connections ~f:(fun connections neighbour -> *)
-    (*         let neighbours_of_neighbour = match Map.find connections neighbour with *)
-    (*           | None -> Set.singleton (module Int) node *)
-    (*           | Some old_neighbours -> Set.add old_neighbours node *)
-    (*         in *)
-    (*         Map.set connections neighbour neighbours_of_neighbour) *)
-    (*   in *)
-    (*   TODO *)
-    (*     solve the node registry problem: *)
-    (*     maybe the layergraph abstraction does not work? how to insert a node in there? *)
-    (*     inserting a node into the layergraph should modify the hgraph as well (since it holds values) *)
-    (*   { (\* values = Map.set g.values g.next_available_node value; *\) *)
-    (*     connections = connect_symmetric g.connections g.next_available_node neighbours; *)
-    (*     (\* next_available_node = g.next_available_node + 1 *\) } *)
-
-    let add_neighbours g node added_neighbours =
-      (* let connections = Map.set g.connections node (Neighbours.union (adjacent g node) added_neighbours) in *)
-      let connections = Map.update g.connections node (function
-          | None -> added_neighbours
-          | Some old_neighbours -> Neighbours.union old_neighbours added_neighbours) in
-      let connections = Neighbours.fold added_neighbours ~init:connections
-          ~f:(fun connections added_neighbour ->
-              Map.update connections added_neighbour ~f:(function
-                  | None -> Set.singleton (module Int) node
-                  | Some old -> Set.add old node))
-      in let g = { connections } in
-      assert (invariant g);
-      g
-
-    let remove_neighbours g node removed_neighbours =
-      let connections = Map.update g.connections node (function
-          | None -> Neighbours.create ()
-          | Some old -> Neighbours.diff old removed_neighbours) in
-      let connections = Neighbours.fold removed_neighbours ~init:connections
-          ~f:(fun connections removed_neighbour ->
-              Map.update connections removed_neighbour ~f:(function
-                  | None -> Set.empty (module Int)
-                  | Some old -> Set.remove old node))
-      in let g = { connections } in
-      assert (invariant g);
-      g
-  end
+  module LayerGraph = MapGraph
+  (* struct *)
+  (*   type nonrec node = node [@@deriving sexp] *)
+  (*   include MapGraph *)
+  (* end *)
 
   type t = {
     layers : LayerGraph.t Map.M(Int).t;
@@ -193,7 +200,7 @@ module Hgraph(Distance : DISTANCE) = struct
   (* let layer hgraph i = Map.find_exn hgraph.layers i *)
   let layer hgraph i = match Map.find hgraph.layers i with
     | Some layer -> layer
-    | None -> LayerGraph.create hgraph.values
+    | None -> LayerGraph.create ()
 
   let max_layer hgraph = hgraph.max_layer
   let set_max_layer hgraph m =
@@ -221,13 +228,13 @@ module Hgraph(Distance : DISTANCE) = struct
 
   let insert h i_layer value neighbours =
     let h, node = allocate h value in
-    assert (invariant h);
-    assert (Map.mem h.values node);
+    (* assert (invariant h); *)
+    (* assert (Map.mem h.values node); *)
     let layer = layer h i_layer in
-    assert (LayerGraph.invariant layer);
+    (* assert (LayerGraph.invariant layer); *)
     let updated_layer = LayerGraph.connect_symmetric layer node neighbours in
     let h = { h with layers = Map.set h.layers i_layer updated_layer } in
-    assert (invariant h);
+    (* assert (invariant h); *)
     h
 
   let set_connections h i_layer node neighbours =

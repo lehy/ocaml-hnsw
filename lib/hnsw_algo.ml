@@ -192,7 +192,7 @@ module type SEARCH_GRAPH = sig
 
   module Neighbours : sig
     type t
-    type nonrec node = node
+    (* type nonrec node = node *)
     val fold : t -> init:'acc -> f:('acc -> node -> 'acc) -> 'acc
   end
 
@@ -419,8 +419,8 @@ module type HGRAPH = sig
   module LayerGraph : sig
     (* This must satisfy SEARCH_GRAPH and NEIGHBOUR_GRAPH.  *)
     type t [@@deriving sexp]
-    type nonrec node = node [@@deriving sexp]
-    type nonrec value = value [@@deriving sexp]
+    (* type nonrec node = node [@@deriving sexp] *)
+    (* type nonrec value = value [@@deriving sexp] *)
 
     module Visited : sig
       type t [@@deriving sexp]
@@ -433,7 +433,7 @@ module type HGRAPH = sig
 
     module Neighbours : sig
       type t
-      type nonrec node = node
+      (* type nonrec node = node *)
       val create : unit -> t
       val add : t -> node -> t
       val length : t -> int
@@ -550,7 +550,10 @@ module Build
                         and type t_value_computer = Hgraph.t
                         and type t = VisitMe.nearest)
     (Distance : DISTANCE with type value = Hgraph.value) = struct
-  module Layer = Hgraph.LayerGraph
+  module Layer = struct
+    type node = Hgraph.node [@@deriving sexp]
+    include Hgraph.LayerGraph
+  end
   module SearchLayer = Search(Layer)(VisitMe)(Nearest)(Distance)(Hgraph)
   module SelectNeighbours = SelectNeighbours(Layer)(Distance)(Hgraph)
 
