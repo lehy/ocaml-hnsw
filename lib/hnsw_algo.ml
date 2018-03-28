@@ -411,11 +411,11 @@ wQueue = nearest
     aux (VisitMe.singleton hgraph target start_node) start_node (visited_singleton start_node.node)
 end
 
-module type HGRAPH = sig
+module type HGRAPH_BASE = sig
   type t [@@deriving sexp]
   type node [@@deriving sexp]
   type value [@@deriving sexp]
-
+ 
   module LayerGraph : sig
     (* This must satisfy SEARCH_GRAPH and NEIGHBOUR_GRAPH.  *)
     type t [@@deriving sexp]
@@ -449,7 +449,6 @@ module type HGRAPH = sig
   val value : t -> node -> value
   (* val distance : value -> value -> float *)
 
-  val create : unit -> t
   val layer : t -> int -> LayerGraph.t
 
   val max_layer : t -> int
@@ -458,12 +457,29 @@ module type HGRAPH = sig
   val entry_point : t -> node
   val set_entry_point : t -> node -> t
 
+  (*  overwrite connections of a node  *)
+  val set_connections : t -> int -> node -> LayerGraph.Neighbours.t -> t
+end
+
+module type HGRAPH_INCR = sig
+  include HGRAPH_BASE
+
+  val create : unit -> t
+  
   (*  add a new node with a given value, and given neighbours  *)
   (* val insert_in_layer : t -> int -> value -> LayerGraph.Neighbours.t -> t *)
   val allocate : t -> value -> (t * node)
+end
 
-  (*  overwrite connections of a node  *)
-  val set_connections : t -> int -> node -> LayerGraph.Neighbours.t -> t
+module type HGRAPH = sig
+  include HGRAPH_BASE
+  module Values : sig
+    type t [@@deriving sexp]
+    (* type value [@@deriving sexp] *)
+    val foldi : t -> init:'acc -> f:('acc -> int -> value -> 'acc) -> 'acc
+  end
+  
+  val create : Values.t -> t
 end
 
 module type NEIGHBOUR_GRAPH = sig
@@ -540,8 +556,8 @@ useful they are.
       )
 end
 
-module Build
-    (Hgraph : HGRAPH)
+module BuildBase
+    (Hgraph : HGRAPH_BASE)
     (VisitMe : VISIT_ME with type node = Hgraph.node
                          and type value = Hgraph.value
                          and type t_value_computer = Hgraph.t)
@@ -556,6 +572,110 @@ module Build
   end
   module SearchLayer = Search(Layer)(VisitMe)(Nearest)(Distance)(Hgraph)
   module SelectNeighbours = SelectNeighbours(Layer)(Distance)(Hgraph)
+
+  let insert_knowing_node hgraph point_node point ~num_neighbours ~max_num_neighbours ~max_num_neighbours0
+      ~num_neighbours_search ~level_mult =
+
+    let value_distance node =
+      { node; distance_to_target=Distance.distance (Hgraph.value hgraph node) point }
+    in
+
+    let insert_in_layer_no_neighbours hgraph i_layer value =
+      (* let hgraph, node = Hgraph.allocate hgraph value in *)
+      let hgraph = Hgraph.set_connections hgraph i_layer point_node (Layer.Neighbours.create ()) in
+      Hgraph.set_entry_point hgraph point_node
+    in
+
+    if Hgraph.is_empty hgraph then insert_in_layer_no_neighbours hgraph 0 point else
+      (* let hgraph, point_node = Hgraph.allocate hgraph point in *)
+      let level = Int.of_float @@ Float.round_nearest @@ -. (Float.log (Random.float 1.)) *. level_mult in
+      (* printf "inserting on level %d\n%!" level; *)
+
+      let rec search_upper_layers i_layer (start_node : Hgraph.node value_distance) =
+        if i_layer <= level then start_node, i_layer
+        else
+          let start_node =
+            SearchLayer.search_one hgraph (Hgraph.layer hgraph i_layer) start_node point
+          in search_upper_layers (i_layer - 1) start_node
+      in
+
+      let rec insert_in_lower_layers hgraph i_layer start_nodes =
+        if i_layer < 0 then hgraph, start_nodes else begin
+          let layer_graph = Hgraph.layer hgraph i_layer in
+          let max_num_neighbours = if i_layer = 0 then max_num_neighbours0 else max_num_neighbours in
+          let nearest = SearchLayer.search hgraph layer_graph start_nodes point num_neighbours_search in
+          let neighbours = SelectNeighbours.select_neighbours
+              hgraph
+              ~value:(Hgraph.value hgraph)
+              ~distance:Distance.distance
+              (* XXX Nearest.fold throws out the distance, this is a
+                 pity, it is reconstructed by the MinHeap created by
+                 SelectNeighbours *)
+              layer_graph point (Nearest.fold nearest) num_neighbours
+          in
+          let hgraph = Hgraph.set_connections hgraph i_layer point_node neighbours in
+          let hgraph = Layer.Neighbours.fold neighbours ~init:hgraph
+              ~f:(fun (hgraph : Hgraph.t) (node : Layer.node) ->
+                  (* recompute this since we changed hgraph above  *)
+                  let layer_graph = Hgraph.layer hgraph i_layer in
+                  let connections = Layer.adjacent layer_graph node in
+                  (* XXX would it be useful/fast to compute the
+                     distances of all connections to the target in a
+                     batch?  *)
+                  if Layer.Neighbours.length connections > max_num_neighbours then begin
+                    let new_connections =
+                      SelectNeighbours.select_neighbours hgraph layer_graph
+                        ~value:(Hgraph.value hgraph)
+                        ~distance:Distance.distance
+                        (Hgraph.value hgraph node)
+                        (Layer.Neighbours.fold connections)
+                        max_num_neighbours
+                    in
+                    Hgraph.set_connections hgraph i_layer node new_connections
+                  end else hgraph
+                )
+          in insert_in_lower_layers hgraph (i_layer - 1) (VisitMe.of_nearest nearest)
+        end
+      in
+
+      let search hgraph =
+        let closest_node, layer_level =
+          search_upper_layers (Hgraph.max_layer hgraph) (value_distance (Hgraph.entry_point hgraph))
+        in
+        insert_in_lower_layers hgraph layer_level (VisitMe.singleton hgraph point closest_node)
+      in
+
+      let hgraph, nearest = search hgraph in
+      (* We use max_layer/set_max_layer to notice that we have to update
+         the entry point. This is not satisfying because the graph could
+         manage its max layer by itself, since it knows about it. *)
+      if level > (Hgraph.max_layer hgraph) then
+        (* let point_node = match VisitMe.nearest nearest with *)
+        (*   | Some node -> node *)
+        (*   | None -> failwith "unexpected: visit-me set is empty!" *)
+        (* in *)
+        Hgraph.set_max_layer (Hgraph.set_entry_point hgraph point_node) level
+      else hgraph
+end
+
+module BuildIncr
+    (Hgraph : HGRAPH_INCR)
+    (VisitMe : VISIT_ME with type node = Hgraph.node
+                         and type value = Hgraph.value
+                         and type t_value_computer = Hgraph.t)
+    (Nearest : NEAREST with type node = Hgraph.node
+                        and type value = Hgraph.value
+                        and type t_value_computer = Hgraph.t
+                        and type t = VisitMe.nearest)
+    (Distance : DISTANCE with type value = Hgraph.value) = struct
+  include BuildBase(Hgraph)(VisitMe)(Nearest)(Distance)
+  
+  (* module Layer = struct *)
+  (*   type node = Hgraph.node [@@deriving sexp] *)
+  (*   include Hgraph.LayerGraph *)
+  (* end *)
+  (* module SearchLayer = Search(Layer)(VisitMe)(Nearest)(Distance)(Hgraph) *)
+  (* module SelectNeighbours = SelectNeighbours(Layer)(Distance)(Hgraph) *)
 
   (*
   INSERT(hnsw, q, M, efConstruction, levelMult)
@@ -639,89 +759,94 @@ Notes:
   (* in *)
 
 
-  let insert hgraph point ~num_neighbours ~max_num_neighbours ~max_num_neighbours0
-      ~num_neighbours_search ~level_mult =
+  (* let insert_knowing_node hgraph point_node point ~num_neighbours ~max_num_neighbours ~max_num_neighbours0 *)
+  (*     ~num_neighbours_search ~level_mult = *)
 
-    let value_distance node =
-      { node; distance_to_target=Distance.distance (Hgraph.value hgraph node) point }
-    in
-    
-    let insert_in_layer_no_neighbours hgraph i_layer value =
-      let hgraph, node = Hgraph.allocate hgraph value in
-      Hgraph.set_connections hgraph i_layer node (Layer.Neighbours.create ())
-    in
+  (*   let value_distance node = *)
+  (*     { node; distance_to_target=Distance.distance (Hgraph.value hgraph node) point } *)
+  (*   in *)
 
-    if Hgraph.is_empty hgraph then insert_in_layer_no_neighbours hgraph 0 point else
-      let hgraph, point_node = Hgraph.allocate hgraph point in
-      let level = Int.of_float @@ Float.round_nearest @@ -. (Float.log (Random.float 1.)) *. level_mult in
-      (* printf "inserting on level %d\n%!" level; *)
-      
-      let rec search_upper_layers i_layer (start_node : Hgraph.node value_distance) =
-        if i_layer <= level then start_node, i_layer
-        else
-          let start_node =
-            SearchLayer.search_one hgraph (Hgraph.layer hgraph i_layer) start_node point
-          in search_upper_layers (i_layer - 1) start_node
-      in
+  (*   let insert_in_layer_no_neighbours hgraph i_layer value = *)
+  (*     (\* let hgraph, node = Hgraph.allocate hgraph value in *\) *)
+  (*     let hgraph = Hgraph.set_connections hgraph i_layer point_node (Layer.Neighbours.create ()) in *)
+  (*     Hgraph.set_entry_point hgraph point_node *)
+  (*   in *)
 
-      let rec insert_in_lower_layers hgraph i_layer start_nodes =
-        if i_layer < 0 then hgraph, start_nodes else begin
-          let layer_graph = Hgraph.layer hgraph i_layer in
-          let max_num_neighbours = if i_layer = 0 then max_num_neighbours0 else max_num_neighbours in
-          let nearest = SearchLayer.search hgraph layer_graph start_nodes point num_neighbours_search in
-          let neighbours = SelectNeighbours.select_neighbours
-              hgraph
-              ~value:(Hgraph.value hgraph)
-              ~distance:Distance.distance
-              (* XXX Nearest.fold throws out the distance, this is a
-                 pity, it is reconstructed by the MinHeap created by
-                 SelectNeighbours *)
-              layer_graph point (Nearest.fold nearest) num_neighbours
-          in
-          let hgraph = Hgraph.set_connections hgraph i_layer point_node neighbours in
-          let hgraph = Layer.Neighbours.fold neighbours ~init:hgraph
-              ~f:(fun (hgraph : Hgraph.t) (node : Layer.node) ->
-                  (* recompute this since we changed hgraph above  *)
-                  let layer_graph = Hgraph.layer hgraph i_layer in
-                  let connections = Layer.adjacent layer_graph node in
-                  (* XXX would it be useful/fast to compute the
-                     distances of all connections to the target in a
-                     batch?  *)
-                  if Layer.Neighbours.length connections > max_num_neighbours then begin
-                    let new_connections =
-                      SelectNeighbours.select_neighbours hgraph layer_graph
-                        ~value:(Hgraph.value hgraph)
-                        ~distance:Distance.distance
-                        (Hgraph.value hgraph node)
-                        (Layer.Neighbours.fold connections)
-                        max_num_neighbours
-                    in
-                    Hgraph.set_connections hgraph i_layer node new_connections
-                  end else hgraph
-                )
-          in insert_in_lower_layers hgraph (i_layer - 1) (VisitMe.of_nearest nearest)
-        end
-      in
+  (*   if Hgraph.is_empty hgraph then insert_in_layer_no_neighbours hgraph 0 point else *)
+  (*     (\* let hgraph, point_node = Hgraph.allocate hgraph point in *\) *)
+  (*     let level = Int.of_float @@ Float.round_nearest @@ -. (Float.log (Random.float 1.)) *. level_mult in *)
+  (*     (\* printf "inserting on level %d\n%!" level; *\) *)
 
-      let search hgraph =
-        let closest_node, layer_level =
-          search_upper_layers (Hgraph.max_layer hgraph) (value_distance (Hgraph.entry_point hgraph))
-        in
-        insert_in_lower_layers hgraph layer_level (VisitMe.singleton hgraph point closest_node)
-      in
+  (*     let rec search_upper_layers i_layer (start_node : Hgraph.node value_distance) = *)
+  (*       if i_layer <= level then start_node, i_layer *)
+  (*       else *)
+  (*         let start_node = *)
+  (*           SearchLayer.search_one hgraph (Hgraph.layer hgraph i_layer) start_node point *)
+  (*         in search_upper_layers (i_layer - 1) start_node *)
+  (*     in *)
 
-      let hgraph, nearest = search hgraph in
-      (* We use max_layer/set_max_layer to notice that we have to update
-         the entry point. This is not satisfying because the graph could
-         manage its max layer by itself, since it knows about it. *)
-      if level > (Hgraph.max_layer hgraph) then
-        (* let point_node = match VisitMe.nearest nearest with *)
-        (*   | Some node -> node *)
-        (*   | None -> failwith "unexpected: visit-me set is empty!" *)
-        (* in *)
-        Hgraph.set_max_layer (Hgraph.set_entry_point hgraph point_node) level
-      else hgraph
+  (*     let rec insert_in_lower_layers hgraph i_layer start_nodes = *)
+  (*       if i_layer < 0 then hgraph, start_nodes else begin *)
+  (*         let layer_graph = Hgraph.layer hgraph i_layer in *)
+  (*         let max_num_neighbours = if i_layer = 0 then max_num_neighbours0 else max_num_neighbours in *)
+  (*         let nearest = SearchLayer.search hgraph layer_graph start_nodes point num_neighbours_search in *)
+  (*         let neighbours = SelectNeighbours.select_neighbours *)
+  (*             hgraph *)
+  (*             ~value:(Hgraph.value hgraph) *)
+  (*             ~distance:Distance.distance *)
+  (*             (\* XXX Nearest.fold throws out the distance, this is a *)
+  (*                pity, it is reconstructed by the MinHeap created by *)
+  (*                SelectNeighbours *\) *)
+  (*             layer_graph point (Nearest.fold nearest) num_neighbours *)
+  (*         in *)
+  (*         let hgraph = Hgraph.set_connections hgraph i_layer point_node neighbours in *)
+  (*         let hgraph = Layer.Neighbours.fold neighbours ~init:hgraph *)
+  (*             ~f:(fun (hgraph : Hgraph.t) (node : Layer.node) -> *)
+  (*                 (\* recompute this since we changed hgraph above  *\) *)
+  (*                 let layer_graph = Hgraph.layer hgraph i_layer in *)
+  (*                 let connections = Layer.adjacent layer_graph node in *)
+  (*                 (\* XXX would it be useful/fast to compute the *)
+  (*                    distances of all connections to the target in a *)
+  (*                    batch?  *\) *)
+  (*                 if Layer.Neighbours.length connections > max_num_neighbours then begin *)
+  (*                   let new_connections = *)
+  (*                     SelectNeighbours.select_neighbours hgraph layer_graph *)
+  (*                       ~value:(Hgraph.value hgraph) *)
+  (*                       ~distance:Distance.distance *)
+  (*                       (Hgraph.value hgraph node) *)
+  (*                       (Layer.Neighbours.fold connections) *)
+  (*                       max_num_neighbours *)
+  (*                   in *)
+  (*                   Hgraph.set_connections hgraph i_layer node new_connections *)
+  (*                 end else hgraph *)
+  (*               ) *)
+  (*         in insert_in_lower_layers hgraph (i_layer - 1) (VisitMe.of_nearest nearest) *)
+  (*       end *)
+  (*     in *)
 
+  (*     let search hgraph = *)
+  (*       let closest_node, layer_level = *)
+  (*         search_upper_layers (Hgraph.max_layer hgraph) (value_distance (Hgraph.entry_point hgraph)) *)
+  (*       in *)
+  (*       insert_in_lower_layers hgraph layer_level (VisitMe.singleton hgraph point closest_node) *)
+  (*     in *)
+
+  (*     let hgraph, nearest = search hgraph in *)
+  (*     (\* We use max_layer/set_max_layer to notice that we have to update *)
+  (*        the entry point. This is not satisfying because the graph could *)
+  (*        manage its max layer by itself, since it knows about it. *\) *)
+  (*     if level > (Hgraph.max_layer hgraph) then *)
+  (*       (\* let point_node = match VisitMe.nearest nearest with *\) *)
+  (*       (\*   | Some node -> node *\) *)
+  (*       (\*   | None -> failwith "unexpected: visit-me set is empty!" *\) *)
+  (*       (\* in *\) *)
+  (*       Hgraph.set_max_layer (Hgraph.set_entry_point hgraph point_node) level *)
+  (*     else hgraph *)
+
+  let insert hgraph point =
+    let hgraph, node = Hgraph.allocate hgraph point in
+    insert_knowing_node hgraph node point
+  
   let create point_fold ~num_neighbours ~max_num_neighbours ~max_num_neighbours0
       ~num_neighbours_search ~level_mult =
     point_fold ~init:(Hgraph.create ()) ~f:(fun hgraph point ->
@@ -733,6 +858,25 @@ Notes:
         (*   (Sexp.to_string_hum @@ [%sexp_of : Hgraph.value] point) *)
         (*   (Sexp.to_string_hum @@ [%sexp_of : Hgraph.t] hgraph); *)
         hgraph)
+end
+
+module Build
+      (Hgraph : HGRAPH with type node = int)
+      (VisitMe : VISIT_ME with type node = Hgraph.node
+                           and type value = Hgraph.value
+                           and type t_value_computer = Hgraph.t)
+      (Nearest : NEAREST with type node = Hgraph.node
+                          and type value = Hgraph.value
+                          and type t_value_computer = Hgraph.t
+                          and type t = VisitMe.nearest)
+      (Distance : DISTANCE with type value = Hgraph.value) = struct
+    include BuildBase(Hgraph)(VisitMe)(Nearest)(Distance)
+
+  let create points ~num_neighbours ~max_num_neighbours ~max_num_neighbours0
+      ~num_neighbours_search ~level_mult =
+    Hgraph.Values.foldi points ~init:(Hgraph.create points) ~f:(fun hgraph i point ->
+        insert_knowing_node hgraph i point ~num_neighbours ~max_num_neighbours ~max_num_neighbours0
+          ~num_neighbours_search ~level_mult)
 end
 
 module type KNN_HGRAPH = sig

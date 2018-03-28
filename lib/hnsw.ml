@@ -10,7 +10,7 @@ module MapGraph = struct
   (* type nonrec node = node [@@deriving sexp] *)
   (* type nonrec value = value [@@deriving sexp] *)
   type node = int [@@deriving sexp]
-  
+
   module Visited = struct
     type t = Set.M(Int).t [@@deriving sexp]
     let create () = Set.empty (module Int)
@@ -137,9 +137,48 @@ module MapGraph = struct
     g
 end
 
-module Hgraph(Distance : DISTANCE) = struct
+module type VALUE = sig
+  type value [@@deriving sexp]
+end
+
+module type VALUES = functor (Value : VALUE) -> sig
+  (* type node [@@deriving sexp] *)
+  (* type value [@@deriving sexp] *)
+  type t [@@deriving sexp]
+
+  val length : t -> int
+  val value : t -> int -> Value.value
+end
+
+module MapValues(Value : VALUE) = struct
   type node = int [@@deriving sexp]
-  type value = Distance.value [@@deriving sexp]
+  type t = {
+    values : Value.value Map.M(Int).t;
+    next_node : int;
+  } [@@deriving sexp]
+
+  let create () = {
+    values = Map.empty (module Int);
+    next_node = 0;
+  }
+  let length m = Map.length m.values
+  let value m k = Map.find_exn m.values k
+  let allocate m v =
+    let node = m.next_node in
+    let values = Map.set m.values node v in
+    {
+      values; 
+      next_node = m.next_node + 1
+    }, node
+end
+
+module Dummy = (MapValues : VALUES)
+
+module Hgraph(Values : VALUES)(Distance : DISTANCE) = struct
+  module Values = Values(Distance)
+
+  type node = int (* Values.node *) (* int *) [@@deriving sexp]
+  type value = Distance.value (* Distance.value *) [@@deriving sexp]
 
   module LayerGraph = MapGraph
   (* struct *)
@@ -151,8 +190,8 @@ module Hgraph(Distance : DISTANCE) = struct
     layers : LayerGraph.t Map.M(Int).t;
     max_layer : int;
     entry_point : node;
-    values : value Map.M(Int).t;
-    next_available_node : int
+    values : Values.t; (* value Map.M(Int).t; *)
+    (* next_available_node : int *)
   } [@@deriving sexp]
 
   module Stats = struct
@@ -169,18 +208,19 @@ module Hgraph(Distance : DISTANCE) = struct
             let num_neighbours = LayerGraph.Neighbours.length data in
             (min num_neighbours mi, max num_neighbours ma, n+1, sum+.Float.of_int num_neighbours))
       in { min=mi; max=ma; mean= sum /. Float.of_int n }
-    
+
     let compute hgraph =
       {
-        num_nodes = Map.length hgraph.values;
+        num_nodes = Values.length hgraph.values;
         layer_sizes = Map.map hgraph.layers ~f:(fun layer -> Map.length layer.connections);
         layer_connectivity = Map.map hgraph.layers ~f:min_max_connectivity
       }
   end
-  
+
   exception Value_not_found of string
   let value h node =
-    Map.find_exn h.values node
+    Values.value h.values node
+  (* Map.find_exn h.values node *)
   (* match Map.find h.values node with *)
   (* | None -> raise (Value_not_found (Printf.sprintf "node: %s\nvalues:\n%s" *)
   (*                                     (Sexp.to_string_hum (sexp_of_node node)) *)
@@ -188,14 +228,15 @@ module Hgraph(Distance : DISTANCE) = struct
   (* | Some node -> node *)
 
   (*  not great! entry_point is invalid when the net is empty!  *)
-  let create () =
+  let create (values : Values.t) =
     { layers = Map.empty (module Int);
       max_layer = 0;
-      entry_point = 0;
-      values = Map.empty (module Int);
-      next_available_node = 0 }
+      entry_point = -1;
+      values = values; (* Map.empty (module Int); *)
+      (* next_available_node = 0 *)
+    }
 
-  let is_empty h = Map.is_empty h.values
+  let is_empty h = h.entry_point < 0 (* Map.is_empty h.values *)
 
   (* let layer hgraph i = Map.find_exn hgraph.layers i *)
   let layer hgraph i = match Map.find hgraph.layers i with
@@ -216,26 +257,26 @@ module Hgraph(Distance : DISTANCE) = struct
     printf "setting entry point: %d\n%!" p;
     { h with entry_point = p }
 
-  let allocate_node h =
-    h.next_available_node, { h with next_available_node = h.next_available_node+1 }
+  (* let allocate_node h = *)
+  (*   h.next_available_node, { h with next_available_node = h.next_available_node+1 } *)
 
-  let allocate h value =
-    let node, h = allocate_node h in
-    { h with values = Map.set h.values node value }, node
+  (* let allocate h value = *)
+  (*   let node, h = allocate_node h in *)
+  (*   { h with values = Map.set h.values node value }, node *)
 
   let invariant h =
     Map.for_all h.layers ~f:LayerGraph.invariant
 
-  let insert h i_layer value neighbours =
-    let h, node = allocate h value in
-    (* assert (invariant h); *)
-    (* assert (Map.mem h.values node); *)
-    let layer = layer h i_layer in
-    (* assert (LayerGraph.invariant layer); *)
-    let updated_layer = LayerGraph.connect_symmetric layer node neighbours in
-    let h = { h with layers = Map.set h.layers i_layer updated_layer } in
-    (* assert (invariant h); *)
-    h
+  (* let insert h i_layer value neighbours = *)
+  (*   let h, node = allocate h value in *)
+  (*   (\* assert (invariant h); *\) *)
+  (*   (\* assert (Map.mem h.values node); *\) *)
+  (*   let layer = layer h i_layer in *)
+  (*   (\* assert (LayerGraph.invariant layer); *\) *)
+  (*   let updated_layer = LayerGraph.connect_symmetric layer node neighbours in *)
+  (*   let h = { h with layers = Map.set h.layers i_layer updated_layer } in *)
+  (*   (\* assert (invariant h); *\) *)
+  (*   h *)
 
   let set_connections h i_layer node neighbours =
     let old_neighbours = LayerGraph.adjacent (layer h i_layer) node in
@@ -245,6 +286,15 @@ module Hgraph(Distance : DISTANCE) = struct
     let layer = LayerGraph.add_neighbours layer node added_neighbours in
     let layer = LayerGraph.remove_neighbours layer node removed_neighbours in
     { h with layers = Map.set h.layers i_layer layer }
+end
+
+module HgraphIncr(Distance : DISTANCE) = struct
+  include Hgraph(MapValues)(Distance)
+  module MapValues = MapValues(Distance)
+  let allocate x value =
+    let values, node = MapValues.allocate x.values value in
+    { x with values }, node
+  let create () = create (MapValues.create ())
 end
 
 (* module Value(Distance : DISTANCE) = struct *)
@@ -258,7 +308,7 @@ end
 type 'a value_distance = 'a Hnsw_algo.value_distance [@@deriving sexp]
 
 module Nearest(Distance : DISTANCE) = struct
-  module Hgraph = Hgraph(Distance)
+  module Hgraph = HgraphIncr(Distance)
   type t_value_computer = Hgraph.t [@@deriving sexp]
   type node = Hgraph.node [@@deriving sexp]
   type value = Hgraph.value [@@deriving sexp]
@@ -298,7 +348,7 @@ module Nearest(Distance : DISTANCE) = struct
   (* let insert q node = *)
   (*   let new_element = MaxHeap.Element.of_node q.target q.value_computer node in *)
   (*   insert_distance q new_element *)
-  
+
   let fold x ~init ~f = MaxHeap.fold x.max_priority_queue ~init ~f:(fun acc e -> f acc e.node)
   let fold_distance x ~init ~f = MaxHeap.fold x.max_priority_queue ~init ~f:(fun acc e -> f acc e)
   let max_distance x =
@@ -366,7 +416,7 @@ end
 (* end *)
 
 module VisitMe(Distance : DISTANCE) = struct
-  module Hgraph = Hgraph(Distance)
+  module Hgraph = HgraphIncr(Distance)
   module Nearest = Nearest(Distance)
   module MinHeap = Hnsw_algo.MinHeap(Distance)(Hgraph)
   type t_value_computer = Hgraph.t [@@deriving sexp]
@@ -496,10 +546,10 @@ end
 *)
 
 module MakeSimple(Distance : DISTANCE) = struct
-  module Hgraph = Hgraph(Distance)
+  module Hgraph = HgraphIncr(Distance)
   module VisitMe = VisitMe(Distance)
   module Nearest = Nearest(Distance)
-  module Build = Hnsw_algo.Build(Hgraph)(VisitMe)(Nearest)(Distance)
+  module Build = Hnsw_algo.BuildIncr(Hgraph)(VisitMe)(Nearest)(Distance)
   module Knn = Hnsw_algo.Knn(Hgraph)(VisitMe)(Nearest)(Distance)
 
   type t = Hgraph.t
@@ -524,7 +574,7 @@ module type BATCH = sig
   module Distances : sig
     type t
     val create : len_batch:int -> num_neighbours:int -> t
-      (*  this element list type is ugly, pull it out  *)
+    (*  this element list type is ugly, pull it out  *)
     val set : t -> int -> _ Hnsw_algo.value_distance list -> unit
   end
 end
