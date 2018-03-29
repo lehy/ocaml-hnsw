@@ -77,7 +77,7 @@ end
 module type VALUE = sig
   type t
   type node [@@deriving sexp]
-  type value
+  type value [@@deriving sexp]
   val value : t -> node -> value
 end
 type 'node value_distance = { node : 'node; distance_to_target : float } [@@deriving sexp]
@@ -860,7 +860,7 @@ Notes:
         hgraph)
 end
 
-module Build
+module BuildBatch
       (Hgraph : HGRAPH with type node = int)
       (VisitMe : VISIT_ME with type node = Hgraph.node
                            and type value = Hgraph.value
@@ -881,7 +881,7 @@ end
 
 module type KNN_HGRAPH = sig
   type t
-  type value
+  type value [@@deriving sexp]
   type node [@@deriving sexp]
   module LayerGraph : sig
     include SEARCH_GRAPH with type node = node

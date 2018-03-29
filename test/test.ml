@@ -16,7 +16,7 @@ let train_data = random_data dim n_train in
 let test_data = random_data dim n_test in
 Caml.Format.printf "train data:\n%a\n" Lacaml.S.pp_mat train_data;
 Caml.Format.printf "test data:\n%a\n" Lacaml.S.pp_mat test_data;
-let hgraph = Hnsw.Ba.build_batch train_data in
+let hgraph = Hnsw.Ba.build train_data in
 printf "graph:\n%s\n" (Sexp.to_string_hum @@ Hnsw.Ba.Hgraph.sexp_of_t hgraph);
 show_hgraph hgraph "hgraph.svg";
 let i = ref 0 in

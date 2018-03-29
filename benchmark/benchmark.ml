@@ -140,7 +140,7 @@ let read_data () =
 
 let build_index data =
   let t0 = Unix.gettimeofday () in
-  let hgraph = Hnsw.Ba.build_batch ~num_neighbours:10 ~num_neighbours_build:400 data.Dataset.train in
+  let hgraph = Hnsw.Ba.build ~num_neighbours:10 ~num_neighbours_build:400 data.Dataset.train in
   let t1 = Unix.gettimeofday () in
   printf "index construction: %f s\n%!" (t1-.t0);
   let stats = Hnsw.Ba.Hgraph.Stats.compute hgraph in

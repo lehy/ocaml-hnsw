@@ -141,17 +141,19 @@ module type VALUE = sig
   type value [@@deriving sexp]
 end
 
-module type VALUES = functor (Value : VALUE) -> sig
+module type VALUES = (* functor (Value : VALUE) -> *) sig
   (* type node [@@deriving sexp] *)
   (* type value [@@deriving sexp] *)
   type t [@@deriving sexp]
-
+  type value [@@deriving sexp]
+  
   val length : t -> int
-  val value : t -> int -> Value.value
+  val value : t -> int -> value
 end
 
 module MapValues(Value : VALUE) = struct
   type node = int [@@deriving sexp]
+  type value = Value.value [@@deriving sexp]
   type t = {
     values : Value.value Map.M(Int).t;
     next_node : int;
@@ -172,13 +174,35 @@ module MapValues(Value : VALUE) = struct
     }, node
 end
 
-module Dummy = (MapValues : VALUES)
+module BaValues = struct
+  type node = int [@@deriving sexp]
+  type t = Lacaml.S.mat sexp_opaque [@@deriving sexp]
+  type value = Lacaml.S.vec sexp_opaque [@@deriving sexp]
+  
+  let create ba = ba
+  let length m = Lacaml.S.Mat.dim2 m
+  let value m k = Lacaml.S.Mat.col m k
+  let foldi (m : t)  ~init ~f =
+    let n = Lacaml.S.Mat.dim2 m in
+    let k_print = max (n / 100) 1 in
+    Lacaml.S.Mat.fold_cols
+      (fun (i, acc) col ->
+         if i % k_print = 0 then begin
+           printf "\r              \r%d/%d %d%%%!" i n
+             (Int.of_float (100. *. Float.of_int i /. Float.of_int n));
+         end;
+         (i+1, f acc i col)
+      )
+      (1, init) m |> snd
+end
+
+(* module Dummy = (MapValues : VALUES) *)
 
 module Hgraph(Values : VALUES)(Distance : DISTANCE) = struct
-  module Values = Values(Distance)
+  (* module Values = Values(Distance) *)
 
-  type node = int (* Values.node *) (* int *) [@@deriving sexp]
-  type value = Distance.value (* Distance.value *) [@@deriving sexp]
+  type node = int [@@deriving sexp]
+  type value = Distance.value [@@deriving sexp]
 
   module LayerGraph = MapGraph
   (* struct *)
@@ -289,12 +313,18 @@ module Hgraph(Values : VALUES)(Distance : DISTANCE) = struct
 end
 
 module HgraphIncr(Distance : DISTANCE) = struct
-  include Hgraph(MapValues)(Distance)
   module MapValues = MapValues(Distance)
+  include Hgraph(MapValues)(Distance)
   let allocate x value =
     let values, node = MapValues.allocate x.values value in
     { x with values }, node
   let create () = create (MapValues.create ())
+end
+
+module HgraphBatch(Distance : DISTANCE with type value = Lacaml.S.vec) = struct
+  include Hgraph(BaValues)(Distance)
+  module Values = BaValues
+  let create ba = create (BaValues.create ba)
 end
 
 (* module Value(Distance : DISTANCE) = struct *)
@@ -307,12 +337,12 @@ end
 
 type 'a value_distance = 'a Hnsw_algo.value_distance [@@deriving sexp]
 
-module Nearest(Distance : DISTANCE) = struct
-  module Hgraph = HgraphIncr(Distance)
-  type t_value_computer = Hgraph.t [@@deriving sexp]
-  type node = Hgraph.node [@@deriving sexp]
-  type value = Hgraph.value [@@deriving sexp]
-  module MaxHeap = Hnsw_algo.MaxHeap(Distance)(Hgraph)
+module Nearest(Distance : DISTANCE)(Value : Hnsw_algo.VALUE with type value = Distance.value) = struct
+  (* module Hgraph = HgraphIncr(Distance) *)
+  type t_value_computer = Value.t (* [@@deriving sexp] *)
+  type node = Value.node [@@deriving sexp]
+  type value = Value.value [@@deriving sexp]
+  module MaxHeap = Hnsw_algo.MaxHeap(Distance)(Value)
 
   (* type graph = t [@@deriving sexp] *)
   type t = { value_computer : t_value_computer sexp_opaque;
@@ -415,16 +445,16 @@ end
 (*     N.fold_far_to_near n.k ~init:[] ~f:(fun acc e -> e::acc) *)
 (* end *)
 
-module VisitMe(Distance : DISTANCE) = struct
-  module Hgraph = HgraphIncr(Distance)
-  module Nearest = Nearest(Distance)
-  module MinHeap = Hnsw_algo.MinHeap(Distance)(Hgraph)
-  type t_value_computer = Hgraph.t [@@deriving sexp]
-  type value = Hgraph.value [@@deriving sexp]
+module VisitMe(Distance : DISTANCE)(Value : Hnsw_algo.VALUE with type value = Distance.value) = struct
+  (* module Hgraph = HgraphIncr(Distance) *)
+  module Nearest = Nearest(Distance)(Value)
+  module MinHeap = Hnsw_algo.MinHeap(Distance)(Value)
+  type t_value_computer = Value.t (* [@@deriving sexp] *)
+  type value = Value.value [@@deriving sexp]
   type t = { target : value;
              value_computer : t_value_computer sexp_opaque;
              heap : MinHeap.t } [@@deriving sexp]
-  type node = Hgraph.node
+  type node = Value.node
   type nearest = Nearest.t
 
   let singleton value_computer target element =
@@ -547,8 +577,8 @@ end
 
 module MakeSimple(Distance : DISTANCE) = struct
   module Hgraph = HgraphIncr(Distance)
-  module VisitMe = VisitMe(Distance)
-  module Nearest = Nearest(Distance)
+  module VisitMe = VisitMe(Distance)(Hgraph)
+  module Nearest = Nearest(Distance)(Hgraph)
   module Build = Hnsw_algo.BuildIncr(Hgraph)(VisitMe)(Nearest)(Distance)
   module Knn = Hnsw_algo.Knn(Hgraph)(VisitMe)(Nearest)(Distance)
 
@@ -565,6 +595,37 @@ module MakeSimple(Distance : DISTANCE) = struct
   let knn (hgraph : t) (point : value) ~num_neighbours_search ~num_neighbours =
     Knn.knn hgraph point ~num_neighbours ~num_neighbours_search
 end
+
+module MakeBatch(Distance : DISTANCE with type value = Lacaml.S.vec) = struct
+  module Hgraph = HgraphBatch(Distance)
+  module VisitMe = VisitMe(Distance)(Hgraph)
+  module Nearest = Nearest(Distance)(Hgraph)
+  module Build = Hnsw_algo.BuildBatch(Hgraph)(VisitMe)(Nearest)(Distance)
+  module Knn = Hnsw_algo.Knn(Hgraph)(VisitMe)(Nearest)(Distance)
+
+  type t = Hgraph.t
+  type value = Distance.value
+
+  let build ?(num_neighbours=5) ?(num_neighbours_build=100) values =
+    let max_num_neighbours0 = 2 * num_neighbours in
+    let level_mult = 1. /. Float.log (Float.of_int num_neighbours) in
+    Build.create values
+      ~num_neighbours ~max_num_neighbours:num_neighbours ~max_num_neighbours0
+      ~num_neighbours_search:num_neighbours_build ~level_mult
+
+  let knn (hgraph : t) (point : value) ~num_neighbours_search ~num_neighbours =
+    Knn.knn hgraph point ~num_neighbours ~num_neighbours_search
+
+  let knn_batch hgraph batch ~num_neighbours_search ~num_neighbours =
+    let distances = Lacaml.S.Mat.create num_neighbours (Lacaml.S.Mat.dim2 batch) in
+    let _ = Hgraph.Values.foldi batch ~init:() ~f:(fun () j row ->
+        let neighbours = knn hgraph row ~num_neighbours_search ~num_neighbours in
+        List.iteri neighbours ~f:(fun i { Hnsw_algo.distance_to_target; _ } ->
+            distances.{i+1, j} <- distance_to_target))
+    in
+    distances
+end
+
 
 module type BATCH = sig
   include DISTANCE
@@ -594,44 +655,59 @@ module Make(Batch : BATCH) = struct
     distances
 end
 
-module Ba = struct
-  module Batch = struct
-    type value = Lacaml.S.vec (* (float, Bigarray.float32_elt, Bigarray.c_layout) Bigarray.Array1.t *)
-    type t = Lacaml.S.mat
-    let list_of_bigarray v =
-      let acc = ref [] in
-      for i = 1 to Bigarray.Array1.dim v do
-        acc := v.{i}::!acc
-      done;
-      List.rev !acc
-    let sexp_of_value v = Sexp.List (List.map ~f:(fun e -> Sexp.Atom (Float.to_string e)) (list_of_bigarray v))
-    let value_of_sexp s = invalid_arg "EuclideanDistanceBigarray.value_of_sexp: not implemented"
-    let distance (a : value) (b : value) =
-      Float.sqrt @@ Lacaml.S.Vec.ssqr_diff a b
-
-    let fold ba ~init ~f =
-      let n = Bigarray.Array2.dim2 ba in
-      let k_print = max (n / 100) 1 in
-      let acc = ref init in
-      for i = 1 to n do
-        if i % k_print = 0 then begin
-          printf "\r              \r%d/%d %d%%%!" i n
-            (Int.of_float (100. *. Float.of_int i /. Float.of_int n));
-        end;
-        let row = Lacaml.S.Mat.col ba i in
-        acc := f !acc row
-      done;
-      printf "\n";
-      !acc
-
-    let length ba = Lacaml.S.Mat.dim2 ba
-    module Distances = struct
-      type t = Lacaml.S.Mat.t
-      let create ~len_batch ~num_neighbours = Lacaml.S.Mat.create num_neighbours len_batch
-      let set mat j neighbours =
-        List.iteri neighbours ~f:(fun i { Hnsw_algo.distance_to_target; _ } ->
-            mat.{i+1, j} <- distance_to_target)
-    end
-  end
-  include Make(Batch)
+module EuclideanBa = struct
+  type value = Lacaml.S.vec sexp_opaque [@@deriving sexp]
+  (*  the sqrt is unnecessary probably, the squared distance is fine *)
+  let distance a b = (* Float.sqrt @@ *) Lacaml.S.Vec.ssqr_diff a b
 end
+
+module BatchEuclidean = MakeBatch(EuclideanBa)
+
+module Ba = BatchEuclidean
+(* struct *)
+(*   module Batch = struct *)
+(*     type value = Lacaml.S.vec (\* (float, Bigarray.float32_elt, Bigarray.c_layout) Bigarray.Array1.t *\) *)
+(*     type t = Lacaml.S.mat *)
+(*     let list_of_bigarray v = *)
+(*       let acc = ref [] in *)
+(*       for i = 1 to Bigarray.Array1.dim v do *)
+(*         acc := v.{i}::!acc *)
+(*       done; *)
+(*       List.rev !acc *)
+(*     let sexp_of_value v = Sexp.List (List.map ~f:(fun e -> Sexp.Atom (Float.to_string e)) (list_of_bigarray v)) *)
+(*     let value_of_sexp s = invalid_arg "EuclideanDistanceBigarray.value_of_sexp: not implemented" *)
+(*     let distance (a : value) (b : value) = *)
+(*       Float.sqrt @@ Lacaml.S.Vec.ssqr_diff a b *)
+
+(*     let fold ba ~init ~f = *)
+(*       let n = Bigarray.Array2.dim2 ba in *)
+(*       let k_print = max (n / 100) 1 in *)
+(*       let acc = ref init in *)
+(*       for i = 1 to n do *)
+(*         if i % k_print = 0 then begin *)
+(*           printf "\r              \r%d/%d %d%%%!" i n *)
+(*             (Int.of_float (100. *. Float.of_int i /. Float.of_int n)); *)
+(*         end; *)
+(*         let row = Lacaml.S.Mat.col ba i in *)
+(*         acc := f !acc row *)
+(*       done; *)
+(*       printf "\n"; *)
+(*       !acc *)
+
+(*     let length ba = Lacaml.S.Mat.dim2 ba *)
+(*     module Distances = struct *)
+(*       type t = Lacaml.S.Mat.t *)
+(*       let create ~len_batch ~num_neighbours = Lacaml.S.Mat.create num_neighbours len_batch *)
+(*       let set mat j neighbours = *)
+(*         List.iteri neighbours ~f:(fun i { Hnsw_algo.distance_to_target; _ } -> *)
+(*             mat.{i+1, j} <- distance_to_target) *)
+(*     end *)
+(*   end *)
+(*   include Make(Batch) *)
+(* end *)
+
+(*  TODO:
+    DONE create HgraphBatch
+    - create MakeBatch
+    - make Ba use MakeBatch instead of MakeSimple
+  *)
