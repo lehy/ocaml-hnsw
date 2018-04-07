@@ -84,7 +84,7 @@ module Dataset = struct
 
   let sexp_of_t t = Sexp_of_t.of_dataset t |> Sexp_of_t.sexp_of_t
 
-  let read ?limit f =
+  let read ?limit_train ?limit_test f =
     let data = H5.open_rdonly ("../../../data/" ^ f) in
     (* printf "%s: %s\n" f (Sexp.to_string_hum @@ [%sexp_of : string list] @@ H5.ls data); *)
     let to_lacaml x = Bigarray.Array2.change_layout x Bigarray.fortran_layout in
@@ -99,10 +99,16 @@ module Dataset = struct
     (*   (Bigarray.Array2.dim2 test) *)
     (*   distance; *)
     let ret = { train; test; test_distances; distance=Distance.of_string distance } in
-    let ret = match limit with
-      | None -> ret
-      | Some limit -> { ret with train = Bigarray.Array2.sub_right ret.train 1 limit }
+    let crop mat = function
+      | None -> mat
+      | Some limit -> Bigarray.Array2.sub_right mat 1 limit
     in
+    let ret = { ret with train = crop ret.train limit_train; test = crop ret.test limit_test;
+                         test_distances = crop ret.test_distances limit_test } in
+        (*   match limit_train with *)
+        (*   | None -> ret *)
+        (*   | Some limit -> { ret with train = Bigarray.Array2.sub_right ret.train 1 limit } *)
+    (* in *)
     ret
   ;;
 end;;
@@ -125,6 +131,8 @@ module Recall = struct
     for i_query = 1 to num_queries do
       let num_ok = ref 0 in
       for i_neighbour = 1 to num_neighbours do
+        (* printf "got: %f expected: %f\n" *)
+        (*   got.{i_neighbour, i_query} expected.{num_neighbours, i_query}; *)
         if Float.( <= ) got.{i_neighbour, i_query} (expected.{num_neighbours, i_query} +. epsilon) then
           Int.incr num_ok
       done;
@@ -134,7 +142,7 @@ module Recall = struct
 end
 
 let read_data () =
-  let data = Dataset.read "fashion-mnist-784-euclidean.hdf5" ~limit:5000  in
+  let data = Dataset.read "fashion-mnist-784-euclidean.hdf5" ~limit_train:2000 ~limit_test:5000 in
   printf "read dataset: %s\n" (Sexp.to_string_hum @@ Dataset.sexp_of_t data);
   data
 
