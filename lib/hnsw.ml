@@ -6,6 +6,32 @@ module type DISTANCE = sig
   val distance : value -> value -> float
 end
 
+module NeighbourSet = struct
+  (* gah! I wish I knew how to just say module Neighbours = Set
+     with type t = Set.M(Int) or whatever *)
+  type t = Set.M(Int).t [@@deriving sexp]
+  (* type nonrec node = node *)
+
+  let create () = Set.empty (module Int)
+  let singleton n = Set.singleton (module Int) n
+  let add n node = Set.add n node
+  let remove n node = Set.remove n node
+  let length c = Set.length c
+  let for_all n ~f = Set.for_all n ~f
+  let fold c ~init ~f =
+    Set.fold c ~init ~f
+
+  (* let diff a b = *)
+  (*   Set.diff a b *)
+
+  let diff_both a b =
+    Set.diff b a, Set.diff a b
+
+  let union a b = Set.union a b
+  let for_all x ~f = Set.for_all x ~f
+end
+
+
 module MapGraph = struct
   (* type nonrec node = node [@@deriving sexp] *)
   (* type nonrec value = value [@@deriving sexp] *)
@@ -23,28 +49,7 @@ module MapGraph = struct
     let add visited node = Set.add visited node
   end
 
-  module Neighbours = struct
-    (* gah! I wish I knew how to just say module Neighbours = Set
-       with type t = Set.M(Int) or whatever *)
-    type t = Set.M(Int).t [@@deriving sexp]
-    (* type nonrec node = node *)
-
-    let create () = Set.empty (module Int)
-    let add n node = Set.add n node
-    let length c = Set.length c
-    let for_all n ~f = Set.for_all n ~f
-    let fold c ~init ~f =
-      Set.fold c ~init ~f
-
-    let diff a b =
-      Set.diff a b
-
-    let diff_both a b =
-      Set.diff b a, Set.diff a b
-    
-    let union a b = Set.union a b
-    let for_all x ~f = Set.for_all x ~f
-  end
+  module Neighbours = NeighbourSet
 
   type t = {
     (* values : value Map.M(Int).t; *)
@@ -112,40 +117,60 @@ module MapGraph = struct
   (*     connections = connect_symmetric g.connections g.next_available_node neighbours; *)
   (*     (\* next_available_node = g.next_available_node + 1 *\) } *)
 
-  let add_neighbours g node added_neighbours =
-    (* let connections = Map.set g.connections node (Neighbours.union (adjacent g node) added_neighbours) in *)
-    let connections = Map.update g.connections node (function
-        | None -> added_neighbours
-        | Some old_neighbours -> Neighbours.union old_neighbours added_neighbours) in
-    let connections = Neighbours.fold added_neighbours ~init:connections
-        ~f:(fun connections added_neighbour ->
-            Map.update connections added_neighbour ~f:(function
-                | None -> Set.singleton (module Int) node
-                | Some old -> Set.add old node))
-    in let g = { connections } in
-    (* assert (invariant g); *)
-    g
+  (* let add_neighbours g node added_neighbours = *)
+  (*   (\* let connections = Map.set g.connections node (Neighbours.union (adjacent g node) added_neighbours) in *\) *)
+  (*   let connections = Map.update g.connections node (function *)
+  (*       | None -> added_neighbours *)
+  (*       | Some old_neighbours -> Neighbours.union old_neighbours added_neighbours) in *)
+  (*   let connections = Neighbours.fold added_neighbours ~init:connections *)
+  (*       ~f:(fun connections added_neighbour -> *)
+  (*           Map.update connections added_neighbour ~f:(function *)
+  (*               | None -> Set.singleton (module Int) node *)
+  (*               | Some old -> Set.add old node)) *)
+  (*   in let g = { connections } in *)
+  (*   (\* assert (invariant g); *\) *)
+  (*   g *)
 
-  let remove_neighbours g node removed_neighbours =
-    let connections = Map.update g.connections node (function
-        | None -> Neighbours.create ()
-        | Some old -> Neighbours.diff old removed_neighbours) in
-    let connections = Neighbours.fold removed_neighbours ~init:connections
-        ~f:(fun connections removed_neighbour ->
-            Map.update connections removed_neighbour ~f:(function
-                | None -> Set.empty (module Int)
-                | Some old -> Set.remove old node))
-    in let g = { connections } in
-    (* assert (invariant g); *)
-    g
+  (* let remove_neighbours g node removed_neighbours = *)
+  (*   let connections = Map.update g.connections node (function *)
+  (*       | None -> Neighbours.create () *)
+  (*       | Some old -> Neighbours.diff old removed_neighbours) in *)
+  (*   let connections = Neighbours.fold removed_neighbours ~init:connections *)
+  (*       ~f:(fun connections removed_neighbour -> *)
+  (*           Map.update connections removed_neighbour ~f:(function *)
+  (*               | None -> Set.empty (module Int) *)
+  (*               | Some old -> Set.remove old node)) *)
+  (*   in let g = { connections } in *)
+  (*   (\* assert (invariant g); *\) *)
+  (*   g *)
 
   let set_connections layer node neighbours =
     let old_neighbours = adjacent layer node in
     let added_neighbours, removed_neighbours = Neighbours.diff_both old_neighbours neighbours in
     (* let added_neighbours = Neighbours.diff neighbours old_neighbours in *)
-    let layer = add_neighbours layer node added_neighbours in
-    let layer = remove_neighbours layer node removed_neighbours in
-    layer
+    (* let layer = add_neighbours layer node added_neighbours in *)
+    (* let layer = remove_neighbours layer node removed_neighbours in *)
+    let connections = layer.connections in
+    (*  1. set the connections for the node  *)
+    let connections = Map.update connections node (function
+        | None -> neighbours
+        | Some _ -> neighbours)
+    in
+    (*  2. remove link to node from removed connections  *)
+    let connections = Neighbours.fold removed_neighbours ~init:connections
+        ~f:(fun connections removed_neighbour ->
+            Map.update connections removed_neighbour ~f:(function
+                | None -> assert false
+                | Some old -> Neighbours.remove old node))
+    in
+    (*  2. add link to node to added connections  *)
+    let connections = Neighbours.fold added_neighbours ~init:connections
+        ~f:(fun connections added_neighbour ->
+            Map.update connections added_neighbour ~f:(function
+                | None -> Neighbours.singleton node
+                | Some old -> Neighbours.add old node))
+    in
+    { connections }
 end
 
 module type VALUE = sig
