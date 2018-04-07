@@ -39,6 +39,9 @@ module MapGraph = struct
     let diff a b =
       Set.diff a b
 
+    let diff_both a b =
+      Set.diff b a, Set.diff a b
+    
     let union a b = Set.union a b
     let for_all x ~f = Set.for_all x ~f
   end
@@ -138,8 +141,8 @@ module MapGraph = struct
 
   let set_connections layer node neighbours =
     let old_neighbours = adjacent layer node in
-    let removed_neighbours = Neighbours.diff old_neighbours neighbours in
-    let added_neighbours = Neighbours.diff neighbours old_neighbours in
+    let added_neighbours, removed_neighbours = Neighbours.diff_both old_neighbours neighbours in
+    (* let added_neighbours = Neighbours.diff neighbours old_neighbours in *)
     let layer = add_neighbours layer node added_neighbours in
     let layer = remove_neighbours layer node removed_neighbours in
     layer
