@@ -6,31 +6,54 @@ module type DISTANCE = sig
   val distance : value -> value -> float
 end
 
-module NeighbourSet = struct
+(* module NeighbourSet = struct *)
+(*   (\* gah! I wish I knew how to just say module Neighbours = Set *)
+(*      with type t = Set.M(Int) or whatever *\) *)
+(*   type t = Set.M(Int).t [@@deriving sexp] *)
+(*   (\* type nonrec node = node *\) *)
+
+(*   let create () = Set.empty (module Int) *)
+(*   let singleton n = Set.singleton (module Int) n *)
+(*   let add n node = Set.add n node *)
+(*   let remove n node = Set.remove n node *)
+(*   let length c = Set.length c *)
+(*   let for_all n ~f = Set.for_all n ~f *)
+(*   let fold c ~init ~f = *)
+(*     Set.fold c ~init ~f *)
+
+(*   (\* let diff a b = *\) *)
+(*   (\*   Set.diff a b *\) *)
+
+(*   let diff_both a b = *)
+(*     Set.diff b a, Set.diff a b *)
+
+(*   (\* let union a b = Set.union a b *\) *)
+(* end *)
+
+module NeighbourList = struct
   (* gah! I wish I knew how to just say module Neighbours = Set
      with type t = Set.M(Int) or whatever *)
-  type t = Set.M(Int).t [@@deriving sexp]
-  (* type nonrec node = node *)
+  type t = int list [@@deriving sexp]
 
-  let create () = Set.empty (module Int)
-  let singleton n = Set.singleton (module Int) n
-  let add n node = Set.add n node
-  let remove n node = Set.remove n node
-  let length c = Set.length c
-  let for_all n ~f = Set.for_all n ~f
+  let create () = []
+  let singleton n = [n]
+  let add n node = node::n
+  let remove n node = List.filter n ~f:(fun x -> x <> node)
+  let length c = List.length c
+  let for_all n ~f = List.for_all n ~f
   let fold c ~init ~f =
-    Set.fold c ~init ~f
+    List.fold_left c ~init ~f
 
   (* let diff a b = *)
   (*   Set.diff a b *)
 
   let diff_both a b =
-    Set.diff b a, Set.diff a b
+    let sa = Set.of_list (module Int) a in
+    let sb = Set.of_list (module Int) b in
+    Set.to_list (Set.diff sb sa), Set.to_list (Set.diff sa sb)
 
-  let union a b = Set.union a b
-  let for_all x ~f = Set.for_all x ~f
+      (* let union a b = Set.union a b *)
 end
-
 
 module MapGraph = struct
   (* type nonrec node = node [@@deriving sexp] *)
@@ -49,7 +72,7 @@ module MapGraph = struct
     let add visited node = Set.add visited node
   end
 
-  module Neighbours = NeighbourSet
+  module Neighbours = NeighbourList
 
   type t = {
     (* values : value Map.M(Int).t; *)
@@ -73,13 +96,13 @@ module MapGraph = struct
     match Map.find g.connections node with
     | None -> init
     | Some neighbours ->
-      Set.fold neighbours ~init ~f
+      Neighbours.fold neighbours ~init ~f
 
   (* let distance a b = Distance.distance a b *)
 
   let adjacent g node =
     match Map.find g.connections node with
-    | None -> Set.empty (module Int)
+    | None -> Neighbours.create ()(* Set.empty (module Int) *)
     | Some neighbours -> neighbours
 
   let connect_symmetric g node neighbours =
@@ -91,8 +114,8 @@ module MapGraph = struct
       { connections = Neighbours.fold neighbours ~init:connections
             ~f:(fun connections neighbour ->
                 let neighbours_of_neighbour = match Map.find connections neighbour with
-                  | None -> Set.singleton (module Int) node
-                  | Some old_neighbours -> Set.add old_neighbours node
+                  | None -> Neighbours.singleton node
+                  | Some old_neighbours -> Neighbours.add old_neighbours node
                 in
                 Map.set connections neighbour neighbours_of_neighbour) }
     in
