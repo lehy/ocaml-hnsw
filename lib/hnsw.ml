@@ -135,6 +135,14 @@ module MapGraph = struct
     in let g = { connections } in
     (* assert (invariant g); *)
     g
+
+  let set_connections layer node neighbours =
+    let old_neighbours = adjacent layer node in
+    let removed_neighbours = Neighbours.diff old_neighbours neighbours in
+    let added_neighbours = Neighbours.diff neighbours old_neighbours in
+    let layer = add_neighbours layer node added_neighbours in
+    let layer = remove_neighbours layer node removed_neighbours in
+    layer
 end
 
 module type VALUE = sig
@@ -303,12 +311,7 @@ module Hgraph(Values : VALUES)(Distance : DISTANCE) = struct
   (*   h *)
 
   let set_connections h i_layer node neighbours =
-    let old_neighbours = LayerGraph.adjacent (layer h i_layer) node in
-    let removed_neighbours = LayerGraph.Neighbours.diff old_neighbours neighbours in
-    let added_neighbours = LayerGraph.Neighbours.diff neighbours old_neighbours in
-    let layer = layer h i_layer in
-    let layer = LayerGraph.add_neighbours layer node added_neighbours in
-    let layer = LayerGraph.remove_neighbours layer node removed_neighbours in
+    let layer = LayerGraph.set_connections (layer h i_layer) node neighbours in
     { h with layers = Map.set h.layers i_layer layer }
 end
 
