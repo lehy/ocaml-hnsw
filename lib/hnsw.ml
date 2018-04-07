@@ -660,8 +660,10 @@ end
 
 module EuclideanBa = struct
   type value = Lacaml.S.vec sexp_opaque [@@deriving sexp]
-  (*  the sqrt is unnecessary probably, the squared distance is fine *)
-  let distance a b = (* Float.sqrt @@ *) Lacaml.S.Vec.ssqr_diff a b
+  (* we would be fine doing all intermediary computations in squared
+     distances, but in the end we need to return proper L2 distances to
+     the user; atm it is simpler to just use sqrt here *)
+  let distance a b = Float.sqrt @@ Lacaml.S.Vec.ssqr_diff a b
 end
 
 module BatchEuclidean = MakeBatch(EuclideanBa)
