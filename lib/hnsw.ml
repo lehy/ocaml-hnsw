@@ -52,7 +52,7 @@ module NeighbourList = struct
     let sb = Set.of_list (module Int) b in
     Set.to_list (Set.diff sb sa), Set.to_list (Set.diff sa sb)
 
-      (* let union a b = Set.union a b *)
+  (* let union a b = Set.union a b *)
 end
 
 module MapGraph = struct
@@ -66,20 +66,38 @@ module MapGraph = struct
     (* values : value Map.M(Int).t; *)
     connections : Neighbours.t Map.M(Int).t;
     (* next_available_node : int *)
+    max_node_id : int
   } [@@deriving sexp]
 
-  module Visited = struct
+  let max_node_id x = x.max_node_id
+
+  (* module VisitedSet = struct
+   *   type t_graph = t
+   *   type t = Set.M(Int).t [@@deriving sexp]
+   *   let create graph = Set.empty (module Int)
+   *   (\* type visit = Already_visited | New_visit of t *\)
+   *   (\* let visit visited node = *\)
+   *   (\*   let new_visited = Set.add visited node in *\)
+   *   (\*   if phys_equal new_visited visited then Already_visited *\)
+   *   (\*   else New_visit new_visited *\)
+   *   let mem visited node = Set.mem visited node
+   *   let add visited node = Set.add visited node
+   * end *)
+
+  module VisitedArray = struct
     type t_graph = t
-    type t = Set.M(Int).t [@@deriving sexp]
-    let create graph = Set.empty (module Int)
+    type t = bool array [@@deriving sexp]
+    let create graph = Array.create ~len:(max_node_id graph + 1) false
     (* type visit = Already_visited | New_visit of t *)
     (* let visit visited node = *)
     (*   let new_visited = Set.add visited node in *)
     (*   if phys_equal new_visited visited then Already_visited *)
     (*   else New_visit new_visited *)
-    let mem visited node = Set.mem visited node
-    let add visited node = Set.add visited node
+    let mem visited node = visited.(node)
+    let add visited node = visited.(node) <- true; visited
   end
+
+  module Visited = VisitedArray
   
   (*  XXX TODO: check symmetric  *)
   let invariant x = true
@@ -88,9 +106,10 @@ module MapGraph = struct
   (*       Map.mem x.values key && Neighbours.for_all data ~f:(Map.mem x.values)) *)
 
 
-  let create () =
+  let create max_node_id =
     { (* values; *)
       connections = Map.empty (module Int);
+      max_node_id
       (* next_available_node = 0 *) }
 
   let fold_neighbours g node ~init ~f =
@@ -112,13 +131,13 @@ module MapGraph = struct
     (* assert (Map.mem g.values node); *)
     let connections = Map.set g.connections node neighbours in
     let g =
-      { connections = Neighbours.fold neighbours ~init:connections
-            ~f:(fun connections neighbour ->
-                let neighbours_of_neighbour = match Map.find connections neighbour with
-                  | None -> Neighbours.singleton node
-                  | Some old_neighbours -> Neighbours.add old_neighbours node
-                in
-                Map.set connections neighbour neighbours_of_neighbour) }
+      { g with connections = Neighbours.fold neighbours ~init:connections
+                   ~f:(fun connections neighbour ->
+                       let neighbours_of_neighbour = match Map.find connections neighbour with
+                         | None -> Neighbours.singleton node
+                         | Some old_neighbours -> Neighbours.add old_neighbours node
+                       in
+                       Map.set connections neighbour neighbours_of_neighbour) }
     in
     (* assert (invariant g); *)
     g
@@ -194,7 +213,7 @@ module MapGraph = struct
                 | None -> Neighbours.singleton node
                 | Some old -> Neighbours.add old node))
     in
-    { connections }
+    { layer with connections }
 end
 
 module type VALUE = sig
@@ -206,7 +225,7 @@ module type VALUES = (* functor (Value : VALUE) -> *) sig
   (* type value [@@deriving sexp] *)
   type t [@@deriving sexp]
   type value [@@deriving sexp]
-  
+
   val length : t -> int
   val value : t -> int -> value
 end
@@ -238,7 +257,7 @@ module BaValues = struct
   type node = int [@@deriving sexp]
   type t = Lacaml.S.mat sexp_opaque [@@deriving sexp]
   type value = Lacaml.S.vec sexp_opaque [@@deriving sexp]
-  
+
   let create ba = ba
   let length m = Lacaml.S.Mat.dim2 m
   let value m k = Lacaml.S.Mat.col m k
@@ -320,12 +339,14 @@ module Hgraph(Values : VALUES)(Distance : DISTANCE) = struct
       (* next_available_node = 0 *)
     }
 
+  let max_node_id g = Values.length g.values
+  
   let is_empty h = h.entry_point < 0 (* Map.is_empty h.values *)
 
   (* let layer hgraph i = Map.find_exn hgraph.layers i *)
   let layer hgraph i = match Map.find hgraph.layers i with
     | Some layer -> layer
-    | None -> LayerGraph.create ()
+    | None -> LayerGraph.create (max_node_id hgraph)
 
   let max_layer hgraph = hgraph.max_layer
   let set_max_layer hgraph m =
@@ -767,4 +788,4 @@ module Ba = BatchEuclidean
     DONE create HgraphBatch
     - create MakeBatch
     - make Ba use MakeBatch instead of MakeSimple
-  *)
+*)
