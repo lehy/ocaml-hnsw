@@ -182,8 +182,9 @@ module type SEARCH_GRAPH = sig
   type node [@@deriving sexp]
 
   module Visited : sig
+    type t_graph = t
     type t [@@deriving sexp]
-    val create : unit -> t
+    val create : t_graph -> t
     (* type visit = Already_visited | New_visit of t *)
     (* val visit : t -> node -> visit *)
     val add : t -> node -> t
@@ -330,11 +331,11 @@ wQueue = nearest
   module Neighbours = Graph.Neighbours
   let distance = Distance.distance
 
-  let visited_of_visit_me visit_me =
-    VisitMe.fold visit_me ~init:(Visited.create ()) ~f:Visited.add
+  let visited_of_visit_me graph visit_me =
+    VisitMe.fold visit_me ~init:(Visited.create graph) ~f:Visited.add
 
-  let visited_singleton node =
-    Visited.add (Visited.create ()) node
+  let visited_singleton graph node =
+    Visited.add (Visited.create graph) node
 
   let nearest_of_visit_me hgraph target visit_me ~size_nearest =
     VisitMe.fold visit_me ~init:(Nearest.create hgraph target ~ef:size_nearest)
@@ -374,7 +375,7 @@ wQueue = nearest
         end
     in
     aux start_nodes (nearest_of_visit_me hgraph target start_nodes ~size_nearest)
-      (visited_of_visit_me start_nodes)
+      (visited_of_visit_me graph start_nodes)
 
   let search_one hgraph graph (start_node : Graph.node value_distance) target =
 
@@ -408,7 +409,7 @@ wQueue = nearest
     (*   node=start_node; distance_to_target=distance (Value.value hgraph start_node) target *)
     (* } *)
     (* in *)
-    aux (VisitMe.singleton hgraph target start_node) start_node (visited_singleton start_node.node)
+    aux (VisitMe.singleton hgraph target start_node) start_node (visited_singleton graph start_node.node)
 end
 
 module type HGRAPH_BASE = sig
@@ -423,8 +424,9 @@ module type HGRAPH_BASE = sig
     (* type nonrec value = value [@@deriving sexp] *)
 
     module Visited : sig
+      type t_graph = t
       type t [@@deriving sexp]
-      val create : unit -> t
+      val create : t_graph -> t
       (* type visit = Already_visited | New_visit of t *)
       (* val visit : t -> node -> visit *)
       val mem : t -> node -> bool
