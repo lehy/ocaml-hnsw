@@ -444,6 +444,7 @@ module type HGRAPH_BASE = sig
       val length : t -> int
       val for_all : t -> f:(node -> bool) -> bool
       val fold : t -> init:'acc -> f:('acc -> node -> 'acc) -> 'acc
+      val is_empty : t -> bool
     end
 
     val adjacent : t -> node -> Neighbours.t
@@ -497,6 +498,7 @@ module type NEIGHBOUR_GRAPH = sig
     val add : t -> node -> t
     val length : t -> int
     val for_all : t -> f:(node -> bool) -> bool
+    val is_empty : t -> bool
   end
 end
 
@@ -552,13 +554,16 @@ useful they are.
         )
     in
     let min_heap = MinHeap.of_fold_distance target hgraph current_neighbour_fold in
-    MinHeap.fold_near_to_far_until min_heap ~init:(Graph.Neighbours.create ()) ~f:(fun neighbours node ->
+    let ret = MinHeap.fold_near_to_far_until min_heap ~init:(Graph.Neighbours.create ()) ~f:(fun neighbours node ->
         if is_closer node neighbours then begin
           let neighbours = Graph.Neighbours.add neighbours node.node in
           if Graph.Neighbours.length neighbours >= num_neighbours then MinHeap.Stop neighbours
           else MinHeap.Continue neighbours
         end else MinHeap.Continue neighbours
       )
+    in
+    assert (not @@ Graph.Neighbours.is_empty ret);
+    ret
 end
 
 module BuildBase

@@ -52,6 +52,9 @@ module NeighbourList = struct
     let sb = Set.of_list (module Int) b in
     Set.to_list (Set.diff sb sa), Set.to_list (Set.diff sa sb)
 
+  let is_empty = function
+    | [] -> true
+    | _ -> false
   (* let union a b = Set.union a b *)
 end
 
