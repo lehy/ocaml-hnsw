@@ -193,7 +193,21 @@ module MapGraph = struct
   (*   (\* assert (invariant g); *\) *)
   (*   g *)
 
+  let isolated layer =
+    Map.fold layer.connections ~init:([]) ~f:(fun ~key ~data acc ->
+        if Neighbours.is_empty data then key::acc else acc)
+
+  let check_isolated layer context =
+    match isolated layer with
+    | [] -> []
+    | iso -> printf "%s: isolated: %s\n%!" context (Sexp.to_string_hum @@ [%sexp_of : int list] iso); iso
+  
   let set_connections layer node neighbours =
+    if Neighbours.is_empty neighbours then
+      printf "set_connections %d called with no neighbours\n%!" node;
+    let _ = check_isolated layer (Printf.sprintf "before set_connections %d %s" node
+                                    (Sexp.to_string_hum @@ [%sexp_of : Neighbours.t] neighbours))
+    in
     let old_neighbours = adjacent layer node in
     let added_neighbours, removed_neighbours = Neighbours.diff_both old_neighbours neighbours in
     (* let added_neighbours = Neighbours.diff neighbours old_neighbours in *)
@@ -219,7 +233,18 @@ module MapGraph = struct
                 | None -> Neighbours.singleton node
                 | Some old -> Neighbours.add old node))
     in
-    { layer with connections }
+    let ret = { layer with connections } in
+    let iso = check_isolated ret (Printf.sprintf "after set_connections %d %s" node
+                                    (Sexp.to_string_hum @@ [%sexp_of : Neighbours.t] neighbours))
+    in
+    List.iter iso ~f:(fun n -> printf "previous neighbours of %d: %s\n%!"
+                         n (Sexp.to_string_hum @@ [%sexp_of : Neighbours.t] @@ adjacent layer n));
+    (* Neighbours.fold neighbours ~init:() ~f:(fun () n ->
+     *     let nn = adjacent { layer with connections } n in
+     *     if Neighbours.is_empty nn then
+     *       printf "after set_connections %d %s, %d has no neighbours\n%!"
+     *         node (Sexp.to_string_hum (Neighbours.sexp_of_t neighbours)) n); *)
+    ret
 end
 
 module type VALUE = sig
@@ -304,19 +329,20 @@ module Hgraph(Values : VALUES)(Distance : DISTANCE) = struct
   } [@@deriving sexp]
 
   module Stats = struct
-    type mima = { min : int; max : int; mean : float} [@@deriving sexp]
+    type mima = { min : int; max : int; mean : float; isolated : int list } [@@deriving sexp]
     type t = {
       num_nodes : int;
       layer_sizes : int Map.M(Int).t;
-      layer_connectivity : mima Map.M(Int).t
+      layer_connectivity : mima Map.M(Int).t;
     } [@@deriving sexp]
 
     let min_max_connectivity g =
-      let mi, ma, n, sum =
-        Map.fold g.LayerGraph.connections ~init:(1000000, -1, 0, 0.) ~f:(fun ~key ~data (mi, ma, n, sum) ->
+      let mi, ma, n, sum, isolated =
+        Map.fold g.LayerGraph.connections ~init:(1000000, -1, 0, 0., []) ~f:(fun ~key ~data (mi, ma, n, sum, isolated) ->
             let num_neighbours = LayerGraph.Neighbours.length data in
-            (min num_neighbours mi, max num_neighbours ma, n+1, sum+.Float.of_int num_neighbours))
-      in { min=mi; max=ma; mean= sum /. Float.of_int n }
+            let isolated = if num_neighbours > 0 then isolated else key::isolated in
+            (min num_neighbours mi, max num_neighbours ma, n+1, sum+.Float.of_int num_neighbours, isolated))
+      in { min=mi; max=ma; mean= sum /. Float.of_int n; isolated }
 
     let compute hgraph =
       {

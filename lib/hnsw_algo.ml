@@ -500,6 +500,8 @@ module type NEIGHBOUR_GRAPH = sig
     val for_all : t -> f:(node -> bool) -> bool
     val is_empty : t -> bool
   end
+
+  val adjacent : t -> node -> Neighbours.t
 end
 
 module SelectNeighbours
@@ -548,7 +550,10 @@ useful they are.
       (current_neighbour_fold : init:'acc -> f:('acc -> Graph.node value_distance -> 'acc) -> 'acc)
       (num_neighbours : int) : Graph.Neighbours.t =
     let is_closer (node : MinHeap.Element.t) neighbours =
-      let node_value = value node.node in
+      (* XXX added this if, trying not to cut nodes out completely
+         (not sufficient! would need to modify the fold logic) *)
+      if Graph.Neighbours.length (Graph.adjacent g node.node) <= 1 then true
+      else let node_value = value node.node in
       Graph.Neighbours.for_all neighbours ~f:(fun neighbour ->
           Float.(>) (distance node_value (value neighbour)) node.distance_to_target
         )
