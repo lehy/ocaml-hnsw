@@ -33,26 +33,29 @@ end
 module NeighbourList = struct
   (* gah! I wish I knew how to just say module Neighbours = Set
      with type t = Set.M(Int) or whatever *)
-  type t = int list [@@deriving sexp]
+  type t = { list : int list; length : int } [@@deriving sexp]
 
-  let create () = []
-  let singleton n = [n]
-  let add n node = node::n
-  let remove n node = List.filter n ~f:(fun x -> x <> node)
-  let length c = List.length c
-  let for_all n ~f = List.for_all n ~f
+  let create () = { list=[]; length=0 }
+  let singleton n = { list=[n]; length=1 }
+  let add n node = { list=node::n.list; length=n.length+1 }
+  let remove n node = let l = List.filter n.list ~f:(fun x -> x <> node) in
+    { list=l; length=List.length l} (*  XXX could optimize length computation  *)
+  let length c = c.length
+  let for_all n ~f = List.for_all n.list ~f
   let fold c ~init ~f =
-    List.fold_left c ~init ~f
+    List.fold_left c.list ~init ~f
 
   (* let diff a b = *)
   (*   Set.diff a b *)
 
   let diff_both a b =
-    let sa = Set.of_list (module Int) a in
-    let sb = Set.of_list (module Int) b in
-    Set.to_list (Set.diff sb sa), Set.to_list (Set.diff sa sb)
+    let sa = Set.of_list (module Int) a.list in
+    let sb = Set.of_list (module Int) b.list in
+    let dba = Set.diff sb sa in
+    let dab = Set.diff sa sb in
+    dba, dab
 
-  let is_empty = function
+  let is_empty n = match n.list with
     | [] -> true
     | _ -> false
   (* let union a b = Set.union a b *)
@@ -203,14 +206,14 @@ module MapGraph = struct
         | Some _ -> neighbours)
     in
     (*  2. remove link to node from removed connections  *)
-    let connections = Neighbours.fold removed_neighbours ~init:connections
+    let connections = Set.fold removed_neighbours ~init:connections
         ~f:(fun connections removed_neighbour ->
             Map.update connections removed_neighbour ~f:(function
                 | None -> assert false
                 | Some old -> Neighbours.remove old node))
     in
     (*  2. add link to node to added connections  *)
-    let connections = Neighbours.fold added_neighbours ~init:connections
+    let connections = Set.fold added_neighbours ~init:connections
         ~f:(fun connections added_neighbour ->
             Map.update connections added_neighbour ~f:(function
                 | None -> Neighbours.singleton node
