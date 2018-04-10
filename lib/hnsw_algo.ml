@@ -101,6 +101,9 @@ module MinHeap(Distance : DISTANCE)(Value : VALUE with type value = Distance.val
   let of_fold target g f =
     f ~init:(create ()) ~f:(fun acc node -> add acc (Element.of_node target g node))
 
+  let of_fold_distance target g f =
+    f ~init:(create ()) ~f:add (* (fun acc node -> add acc (Element.of_node target g node)) *)
+  
   let fold_near_to_far_until = fold_top_to_bottom_until
   
   let nearest_k k target g node_fold =
@@ -156,7 +159,7 @@ module type NEAREST = sig
   (* val of_fold : (init:'acc -> f:('acc -> node -> 'acc) -> 'acc) -> t *)
 
   (*  in no particular order  *)
-  val fold : t -> init:'acc -> f:('acc -> node -> 'acc) -> 'acc
+  val fold_distance : t -> init:'acc -> f:('acc -> node value_distance -> 'acc) -> 'acc
   val max_distance : t -> float
   val nearest_k : t -> int -> node value_distance list
 end
@@ -540,17 +543,17 @@ useful they are.
   let select_neighbours
       hgraph (g : Graph.t) target
       ~value ~distance
-      (current_neighbour_fold : init:'acc -> f:('acc -> Graph.node -> 'acc) -> 'acc)
+      (current_neighbour_fold : init:'acc -> f:('acc -> Graph.node value_distance -> 'acc) -> 'acc)
       (num_neighbours : int) : Graph.Neighbours.t =
-    let is_closer target (node : MinHeap.Element.t) neighbours =
+    let is_closer (node : MinHeap.Element.t) neighbours =
       let node_value = value node.node in
       Graph.Neighbours.for_all neighbours ~f:(fun neighbour ->
           Float.(>) (distance node_value (value neighbour)) node.distance_to_target
         )
     in
-    let min_heap = MinHeap.of_fold target hgraph current_neighbour_fold in
+    let min_heap = MinHeap.of_fold_distance target hgraph current_neighbour_fold in
     MinHeap.fold_near_to_far_until min_heap ~init:(Graph.Neighbours.create ()) ~f:(fun neighbours node ->
-        if is_closer target node neighbours then begin
+        if is_closer node neighbours then begin
           let neighbours = Graph.Neighbours.add neighbours node.node in
           if Graph.Neighbours.length neighbours >= num_neighbours then MinHeap.Stop neighbours
           else MinHeap.Continue neighbours
@@ -610,10 +613,7 @@ module BuildBase
               hgraph
               ~value:(Hgraph.value hgraph)
               ~distance:Distance.distance
-              (* XXX Nearest.fold throws out the distance, this is a
-                 pity, it is reconstructed by the MinHeap created by
-                 SelectNeighbours *)
-              layer_graph point (Nearest.fold nearest) num_neighbours
+              layer_graph point (Nearest.fold_distance nearest) num_neighbours
           in
           let hgraph = Hgraph.set_connections hgraph i_layer point_node neighbours in
           let hgraph = Layer.Neighbours.fold neighbours ~init:hgraph
@@ -630,7 +630,9 @@ module BuildBase
                         ~value:(Hgraph.value hgraph)
                         ~distance:Distance.distance
                         (Hgraph.value hgraph node)
-                        (Layer.Neighbours.fold connections)
+                        (fun ~init ~f ->
+                           Layer.Neighbours.fold connections ~init
+                             ~f:(fun acc node -> f acc (value_distance node)))
                         max_num_neighbours
                     in
                     Hgraph.set_connections hgraph i_layer node new_connections
