@@ -2,6 +2,8 @@ open Base
 open Stdio (* XXX DEBUG  *)
 (*  https://arxiv.org/abs/1603.09320  *)
 
+let tsh f x = Sexp.to_string_hum (f x)
+
 (* 
    I cannot find a priority queue or heap in Base.
    Core_kernel has FHeap and Heap which look like they might work.
@@ -192,6 +194,7 @@ module type SEARCH_GRAPH = sig
     (* val visit : t -> node -> visit *)
     val add : t -> node -> t
     val mem : t -> node -> bool
+    val length : t -> int
   end
 
   module Neighbours : sig
@@ -201,6 +204,7 @@ module type SEARCH_GRAPH = sig
   end
 
   val adjacent : t -> node -> Neighbours.t
+  val num_nodes : t -> int
 end
 
 module Search
@@ -366,6 +370,11 @@ wQueue = nearest
       end
     in
     let rec aux visit_me nearest visited =
+      (* printf "search: visited %d/%d\n%!" (Visited.length visited) (Graph.num_nodes graph);
+       * printf "  visit_me: %s\n" (tsh [%sexp_of : VisitMe.t] visit_me);
+       * printf "  nearest: %s\n" (tsh [%sexp_of : Nearest.t] nearest); *)
+
+      (*  XXX TODO check this, it seems we are always visiting almost all the graph  *)
       match VisitMe.pop_nearest visit_me with
       | None -> nearest
       | Some (c, visit_me) ->
@@ -393,13 +402,17 @@ wQueue = nearest
           (visit_me, nearest, visited)
         else
           let visit_me = VisitMe.add_distance visit_me neighbour_distance in
-          (visit_me, nearest, visited)
+          (visit_me, neighbour_distance, visited)
       end
     in
     let rec aux visit_me (nearest : Graph.node value_distance) visited =
+      (* printf "search_one: visited %d/%d\n%!" (Visited.length visited) (Graph.num_nodes graph);
+       * printf "  visit_me: %s\n" (tsh [%sexp_of : VisitMe.t] visit_me);
+       * printf "  nearest: %s\n" (tsh [%sexp_of : Graph.node value_distance] nearest); *)
       match VisitMe.pop_nearest visit_me with
       | None -> nearest
       | Some (c, visit_me) ->
+        (* printf "  picked: %s\n" (tsh [%sexp_of : Graph.node value_distance] c); *)
         if Float.(c.distance_to_target > nearest.distance_to_target) then nearest
         else begin
           let visit_me, nearest, visited = Neighbours.fold (Graph.adjacent graph c.node)
@@ -434,6 +447,7 @@ module type HGRAPH_BASE = sig
       (* val visit : t -> node -> visit *)
       val mem : t -> node -> bool
       val add : t -> node -> t
+      val length : t -> int
     end
 
     module Neighbours : sig
@@ -448,6 +462,7 @@ module type HGRAPH_BASE = sig
     end
 
     val adjacent : t -> node -> Neighbours.t
+    val num_nodes : t -> int
   end
 
   val is_empty : t -> bool
@@ -551,7 +566,10 @@ useful they are.
       (num_neighbours : int) : Graph.Neighbours.t =
     let is_closer (node : MinHeap.Element.t) neighbours =
       (* XXX added this if, trying not to cut nodes out completely
-         (not sufficient! would need to modify the fold logic) *)
+         (not sufficient! would need to modify the fold logic) -- it
+         seems to work in practice -- XXX TODO this could be done only
+         when modifying an existing node (pass a boolean to indicate),
+         and not when creating a new node *)
       if Graph.Neighbours.length (Graph.adjacent g node.node) <= 1 then true
       else let node_value = value node.node in
       Graph.Neighbours.for_all neighbours ~f:(fun neighbour ->
@@ -610,14 +628,17 @@ module BuildBase
         if i_layer <= level then start_node, i_layer
         else
           let start_node =
+            (* printf "insert: search_one in upper layer %d\n%!" i_layer; *)
             SearchLayer.search_one hgraph (Hgraph.layer hgraph i_layer) start_node point
-          in search_upper_layers (i_layer - 1) start_node
+          in
+          search_upper_layers (i_layer - 1) start_node
       in
 
       let rec insert_in_lower_layers hgraph i_layer start_nodes =
         if i_layer < 0 then hgraph, start_nodes else begin
           let layer_graph = Hgraph.layer hgraph i_layer in
           let max_num_neighbours = if i_layer = 0 then max_num_neighbours0 else max_num_neighbours in
+          (* printf "insert: search in lower layer %d\n%!" i_layer; *)
           let nearest = SearchLayer.search hgraph layer_graph start_nodes point num_neighbours_search in
           let neighbours = SelectNeighbours.select_neighbours
               hgraph
@@ -939,7 +960,8 @@ module Knn
   module Search = Search(Hgraph.LayerGraph)(VisitMe)(Nearest)(Distance)(Hgraph)
   module MinHeap = MinHeap(Distance)(Hgraph)
 
-  let knn hgraph target ?(num_neighbours_search=5) ~num_neighbours =   
+  let knn hgraph target ?(num_neighbours_search=5) ~num_neighbours =
+    (* printf "knn: n_search: %d n:%d\n" num_neighbours_search num_neighbours; *)
     let rec search_upper i_layer start_node =
       if i_layer <= 0 then start_node
       else

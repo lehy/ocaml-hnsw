@@ -121,6 +121,7 @@ let nans_like a =
   ret
 
 module Recall = struct
+  (*  XXX check computation  *)
   let compute ?(epsilon=1e-8) expected got =
     let module A = Bigarray.Array2 in
     if A.dim1 expected <> A.dim1 got || A.dim2 expected <> A.dim2 got then
@@ -142,13 +143,13 @@ module Recall = struct
 end
 
 let read_data () =
-  let data = Dataset.read "fashion-mnist-784-euclidean.hdf5" ~limit_train:2000 ~limit_test:5000 in
+  let data = Dataset.read "fashion-mnist-784-euclidean.hdf5" (* ~limit_train:20000 *) (* ~limit_test:20000 *) in
   printf "read dataset: %s\n" (Sexp.to_string_hum @@ Dataset.sexp_of_t data);
   data
 
 let build_index data =
   let t0 = Unix.gettimeofday () in
-  let hgraph = Hnsw.Ba.build ~num_neighbours:10 ~num_neighbours_build:400 data.Dataset.train in
+  let hgraph = Hnsw.Ba.build ~num_neighbours:5 ~num_neighbours_build:20 data.Dataset.train in
   let t1 = Unix.gettimeofday () in
   printf "index construction: %f s\n%!" (t1-.t0);
   let stats = Hnsw.Ba.Hgraph.Stats.compute hgraph in
@@ -157,6 +158,7 @@ let build_index data =
 
 let test (data : Dataset.t) hgraph =
   let num_neighbours = Bigarray.Array2.dim1 data.test_distances in
+  printf "bench: num_neighbours: %d\n" num_neighbours;
   let t1 = Unix.gettimeofday () in
   let got_distances =
     Hnsw.Ba.knn_batch hgraph data.test ~num_neighbours ~num_neighbours_search:num_neighbours

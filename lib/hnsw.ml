@@ -101,6 +101,7 @@ module MapGraph = struct
     (*   else New_visit new_visited *)
     let mem visited node = visited.(node)
     let add visited node = visited.(node) <- true; visited
+    let length a = Array.fold a ~init:0 ~f:(fun acc e -> if e then acc+1 else acc)
   end
 
   module Visited = VisitedArray
@@ -131,6 +132,8 @@ module MapGraph = struct
     | None -> Neighbours.create ()(* Set.empty (module Int) *)
     | Some neighbours -> neighbours
 
+  let num_nodes g = Map.length g.connections
+  
   let connect_symmetric g node neighbours =
     (* assert (invariant g); *)
     (* assert (Neighbours.for_all neighbours ~f:(Map.mem g.values)); *)
@@ -726,6 +729,7 @@ module MakeBatch(Distance : DISTANCE with type value = Lacaml.S.vec) = struct
 
   let knn_batch hgraph batch ~num_neighbours_search ~num_neighbours =
     let distances = Lacaml.S.Mat.create num_neighbours (Lacaml.S.Mat.dim2 batch) in
+    Lacaml.S.Mat.fill distances Float.infinity;
     let _ = Hgraph.Values.foldi batch ~init:() ~f:(fun () j row ->
         let neighbours = knn hgraph row ~num_neighbours_search ~num_neighbours in
         List.iteri neighbours ~f:(fun i { Hnsw_algo.distance_to_target; _ } ->
