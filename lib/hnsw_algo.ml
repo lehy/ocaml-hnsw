@@ -105,9 +105,9 @@ module MinHeap(Distance : DISTANCE)(Value : VALUE with type value = Distance.val
 
   let of_fold_distance target g f =
     f ~init:(create ()) ~f:add (* (fun acc node -> add acc (Element.of_node target g node)) *)
-  
+
   let fold_near_to_far_until = fold_top_to_bottom_until
-  
+
   let nearest_k k target g node_fold =
     let rev, _ = fold_near_to_far_until (of_fold target g node_fold) ~init:([], 0)
         ~f:(fun ((acc, n) as accn) e -> if n = k then Stop accn else Continue (e::acc, n+1))
@@ -374,12 +374,15 @@ wQueue = nearest
        * printf "  visit_me: %s\n" (tsh [%sexp_of : VisitMe.t] visit_me);
        * printf "  nearest: %s\n" (tsh [%sexp_of : Nearest.t] nearest); *)
 
-      (*  XXX TODO check this, it seems we are always visiting almost all the graph  *)
       match VisitMe.pop_nearest visit_me with
-      | None -> nearest
+      | None ->
+        (* printf "search: (visit_me is empty) visited %d/%d\n%!" (Visited.length visited) (Graph.num_nodes graph); *)
+        nearest
       | Some (c, visit_me) ->
-        if Float.(c.distance_to_target > Nearest.max_distance nearest) then nearest
-        else begin
+        if Float.(c.distance_to_target > Nearest.max_distance nearest) then begin
+          (* printf "search: (best visit_me item is too far) visited %d/%d\n%!" (Visited.length visited) (Graph.num_nodes graph); *)
+          nearest
+        end else begin
           let visit_me, nearest, visited = Neighbours.fold (Graph.adjacent graph c.node)
               ~init:(visit_me, nearest, visited)
               ~f:visit
@@ -410,11 +413,15 @@ wQueue = nearest
        * printf "  visit_me: %s\n" (tsh [%sexp_of : VisitMe.t] visit_me);
        * printf "  nearest: %s\n" (tsh [%sexp_of : Graph.node value_distance] nearest); *)
       match VisitMe.pop_nearest visit_me with
-      | None -> nearest
+      | None ->
+        (* printf "search_one: (visit_me is empty) visited %d/%d\n%!" (Visited.length visited) (Graph.num_nodes graph); *)
+        nearest
       | Some (c, visit_me) ->
         (* printf "  picked: %s\n" (tsh [%sexp_of : Graph.node value_distance] c); *)
-        if Float.(c.distance_to_target > nearest.distance_to_target) then nearest
-        else begin
+        if Float.(c.distance_to_target > nearest.distance_to_target) then begin
+          (* printf "search_one: (visit_me item is too far) visited %d/%d\n%!" (Visited.length visited) (Graph.num_nodes graph); *)
+          nearest
+        end else begin
           let visit_me, nearest, visited = Neighbours.fold (Graph.adjacent graph c.node)
               ~init:(visit_me, nearest, visited)
               ~f:visit
@@ -432,7 +439,7 @@ module type HGRAPH_BASE = sig
   type t [@@deriving sexp]
   type node [@@deriving sexp]
   type value [@@deriving sexp]
- 
+
   module LayerGraph : sig
     (* This must satisfy SEARCH_GRAPH and NEIGHBOUR_GRAPH.  *)
     type t [@@deriving sexp]
@@ -486,7 +493,7 @@ module type HGRAPH_INCR = sig
   include HGRAPH_BASE
 
   val create : unit -> t
-  
+
   (*  add a new node with a given value, and given neighbours  *)
   (* val insert_in_layer : t -> int -> value -> LayerGraph.Neighbours.t -> t *)
   val allocate : t -> value -> (t * node)
@@ -499,7 +506,7 @@ module type HGRAPH = sig
     (* type value [@@deriving sexp] *)
     val foldi : t -> init:'acc -> f:('acc -> int -> value -> 'acc) -> 'acc
   end
-  
+
   val create : Values.t -> t
 end
 
@@ -561,23 +568,28 @@ useful they are.
 
   let select_neighbours
       hgraph (g : Graph.t) target
-      ~value ~distance
+      ~value ~distance ?(do_not_isolate=false)
       (current_neighbour_fold : init:'acc -> f:('acc -> Graph.node value_distance -> 'acc) -> 'acc)
       (num_neighbours : int) : Graph.Neighbours.t =
     let is_closer (node : MinHeap.Element.t) neighbours =
-      (* XXX added this if, trying not to cut nodes out completely
-         (not sufficient! would need to modify the fold logic) -- it
-         seems to work in practice -- XXX TODO this could be done only
-         when modifying an existing node (pass a boolean to indicate),
-         and not when creating a new node *)
-      if Graph.Neighbours.length (Graph.adjacent g node.node) <= 1 then true
-      else let node_value = value node.node in
+      let node_value = value node.node in
       Graph.Neighbours.for_all neighbours ~f:(fun neighbour ->
           Float.(>) (distance node_value (value neighbour)) node.distance_to_target
         )
     in
-    let min_heap = MinHeap.of_fold_distance target hgraph current_neighbour_fold in
-    let ret = MinHeap.fold_near_to_far_until min_heap ~init:(Graph.Neighbours.create ()) ~f:(fun neighbours node ->
+    (* added do_not_isolate to avoid cutting out nodes completely
+
+       tried moving do_not_isolate check out of the loop but
+       current_neighbour_fold is monomorphic on 'acc :( *)
+    let new_neighbours, min_heap = 
+      current_neighbour_fold ~init:(Graph.Neighbours.create (), MinHeap.create ())
+        ~f:(fun (new_neighbours, min_heap) neighbour ->
+            if do_not_isolate && Graph.Neighbours.length (Graph.adjacent g neighbour.node) <= 1 then
+              Graph.Neighbours.add new_neighbours neighbour.node, min_heap
+            else
+              new_neighbours, MinHeap.add min_heap neighbour)
+    in
+    let ret = MinHeap.fold_near_to_far_until min_heap ~init:new_neighbours ~f:(fun neighbours node ->
         if is_closer node neighbours then begin
           let neighbours = Graph.Neighbours.add neighbours node.node in
           if Graph.Neighbours.length neighbours >= num_neighbours then MinHeap.Stop neighbours
@@ -660,6 +672,7 @@ module BuildBase
                       SelectNeighbours.select_neighbours hgraph layer_graph
                         ~value:(Hgraph.value hgraph)
                         ~distance:Distance.distance
+                        ~do_not_isolate:true
                         (Hgraph.value hgraph node)
                         (fun ~init ~f ->
                            Layer.Neighbours.fold connections ~init
@@ -704,7 +717,7 @@ module BuildIncr
                         and type t = VisitMe.nearest)
     (Distance : DISTANCE with type value = Hgraph.value) = struct
   include BuildBase(Hgraph)(VisitMe)(Nearest)(Distance)
-  
+
   (* module Layer = struct *)
   (*   type node = Hgraph.node [@@deriving sexp] *)
   (*   include Hgraph.LayerGraph *)
@@ -881,7 +894,7 @@ Notes:
   let insert hgraph point =
     let hgraph, node = Hgraph.allocate hgraph point in
     insert_knowing_node hgraph node point
-  
+
   let create point_fold ~num_neighbours ~max_num_neighbours ~max_num_neighbours0
       ~num_neighbours_search ~level_mult =
     point_fold ~init:(Hgraph.create ()) ~f:(fun hgraph point ->
@@ -896,16 +909,16 @@ Notes:
 end
 
 module BuildBatch
-      (Hgraph : HGRAPH with type node = int)
-      (VisitMe : VISIT_ME with type node = Hgraph.node
-                           and type value = Hgraph.value
-                           and type t_value_computer = Hgraph.t)
-      (Nearest : NEAREST with type node = Hgraph.node
-                          and type value = Hgraph.value
-                          and type t_value_computer = Hgraph.t
-                          and type t = VisitMe.nearest)
-      (Distance : DISTANCE with type value = Hgraph.value) = struct
-    include BuildBase(Hgraph)(VisitMe)(Nearest)(Distance)
+    (Hgraph : HGRAPH with type node = int)
+    (VisitMe : VISIT_ME with type node = Hgraph.node
+                         and type value = Hgraph.value
+                         and type t_value_computer = Hgraph.t)
+    (Nearest : NEAREST with type node = Hgraph.node
+                        and type value = Hgraph.value
+                        and type t_value_computer = Hgraph.t
+                        and type t = VisitMe.nearest)
+    (Distance : DISTANCE with type value = Hgraph.value) = struct
+  include BuildBase(Hgraph)(VisitMe)(Nearest)(Distance)
 
   let create points ~num_neighbours ~max_num_neighbours ~max_num_neighbours0
       ~num_neighbours_search ~level_mult =
@@ -972,7 +985,7 @@ module Knn
     let value_distance node =
       { node; distance_to_target=Distance.distance (Hgraph.value hgraph node) target }
     in
-    
+
     let start_node_zero =
       search_upper (Hgraph.max_layer hgraph) (value_distance (Hgraph.entry_point hgraph))
     in
@@ -1000,8 +1013,9 @@ module Knn
   (*         (VisitMe.singleton hgraph target nearest.node) *)
   (*         (i_layer - 1) *)
   (* in *)
-    (* aux *)
-    (*   (VisitMe.singleton hgraph target (Hgraph.entry_point hgraph)) *)
-    (*   (Hgraph.max_layer hgraph) *)
+  (* aux *)
+  (*   (VisitMe.singleton hgraph target (Hgraph.entry_point hgraph)) *)
+  (*   (Hgraph.max_layer hgraph) *)
 end
 
+(*  XXX TODO draw 2d navigation graphs to check that things look ok  *)
