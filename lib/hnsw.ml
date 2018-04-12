@@ -206,11 +206,11 @@ module MapGraph = struct
     | iso -> printf "%s: isolated: %s\n%!" context (Sexp.to_string_hum @@ [%sexp_of : int list] iso); iso
   
   let set_connections layer node neighbours =
-    if Neighbours.is_empty neighbours then
-      printf "set_connections %d called with no neighbours\n%!" node;
-    let _ = check_isolated layer (Printf.sprintf "before set_connections %d %s" node
-                                    (Sexp.to_string_hum @@ [%sexp_of : Neighbours.t] neighbours))
-    in
+    (* if Neighbours.is_empty neighbours then *)
+      (* printf "set_connections %d called with no neighbours\n%!" node; *)
+    (* let _ = check_isolated layer (Printf.sprintf "before set_connections %d %s" node
+     *                                 (Sexp.to_string_hum @@ [%sexp_of : Neighbours.t] neighbours))
+     * in *)
     let old_neighbours = adjacent layer node in
     let added_neighbours, removed_neighbours = Neighbours.diff_both old_neighbours neighbours in
     (* let added_neighbours = Neighbours.diff neighbours old_neighbours in *)
@@ -237,11 +237,11 @@ module MapGraph = struct
                 | Some old -> Neighbours.add old node))
     in
     let ret = { layer with connections } in
-    let iso = check_isolated ret (Printf.sprintf "after set_connections %d %s" node
-                                    (Sexp.to_string_hum @@ [%sexp_of : Neighbours.t] neighbours))
-    in
-    List.iter iso ~f:(fun n -> printf "previous neighbours of %d: %s\n%!"
-                         n (Sexp.to_string_hum @@ [%sexp_of : Neighbours.t] @@ adjacent layer n));
+    (* let iso = check_isolated ret (Printf.sprintf "after set_connections %d %s" node
+     *                                 (Sexp.to_string_hum @@ [%sexp_of : Neighbours.t] neighbours))
+     * in *)
+    (* List.iter iso ~f:(fun n -> printf "previous neighbours of %d: %s\n%!"
+     *                      n (Sexp.to_string_hum @@ [%sexp_of : Neighbours.t] @@ adjacent layer n)); *)
     (* Neighbours.fold neighbours ~init:() ~f:(fun () n ->
      *     let nn = adjacent { layer with connections } n in
      *     if Neighbours.is_empty nn then
@@ -394,7 +394,7 @@ module Hgraph(Values : VALUES)(Distance : DISTANCE) = struct
      not a problem. *)
   let entry_point h = h.entry_point
   let set_entry_point h p =
-    printf "setting entry point: %d\n%!" p;
+    (* printf "setting entry point: %d\n%!" p; *)
     { h with entry_point = p }
 
   (* let allocate_node h = *)
@@ -696,7 +696,7 @@ module MakeSimple(Distance : DISTANCE) = struct
   type t = Hgraph.t
   type value = Distance.value
 
-  let build ?(num_neighbours=5) ?(num_neighbours_build=100) fold_rows =
+  let build ~num_neighbours ~num_neighbours_build fold_rows =
     let max_num_neighbours0 = 2 * num_neighbours in
     let level_mult = 1. /. Float.log (Float.of_int num_neighbours) in
     Build.create fold_rows
@@ -717,7 +717,7 @@ module MakeBatch(Distance : DISTANCE with type value = Lacaml.S.vec) = struct
   type t = Hgraph.t
   type value = Distance.value
 
-  let build ?(num_neighbours=5) ?(num_neighbours_build=100) values =
+  let build ~num_neighbours ~num_neighbours_build values =
     let max_num_neighbours0 = 2 * num_neighbours in
     let level_mult = 1. /. Float.log (Float.of_int num_neighbours) in
     Build.create values
@@ -755,7 +755,7 @@ end
 module Make(Batch : BATCH) = struct
   include MakeSimple(Batch)
 
-  let build_batch ?(num_neighbours=5) ?(num_neighbours_build=100) data =
+  let build_batch ~num_neighbours ~num_neighbours_build data =
     build ~num_neighbours ~num_neighbours_build (Batch.fold data)
 
   let knn_batch hgraph batch ~num_neighbours_search ~num_neighbours =
