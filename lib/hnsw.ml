@@ -708,6 +708,13 @@ module MakeSimple(Distance : DISTANCE) = struct
 end
 
 module MakeBatch(Distance : DISTANCE with type value = Lacaml.S.vec) = struct
+  module Distance = struct
+    type value = Distance.value [@@deriving sexp]
+    let num_calls = ref 0
+    let distance a b =
+      Int.incr num_calls;
+      Distance.distance a b
+  end
   module Hgraph = HgraphBatch(Distance)
   module VisitMe = VisitMe(Distance)(Hgraph)
   module Nearest = Nearest(Distance)(Hgraph)
@@ -717,6 +724,13 @@ module MakeBatch(Distance : DISTANCE with type value = Lacaml.S.vec) = struct
   type t = Hgraph.t
   type value = Distance.value
 
+  let count_distance name f =
+    let n0 = !Distance.num_calls in
+    let ret = f () in
+    let dn = !Distance.num_calls - n0 in
+    printf "%s: %d distance computations\n" name dn;
+    ret
+  
   let build ~num_neighbours ~num_neighbours_build values =
     let max_num_neighbours0 = 2 * num_neighbours in
     let level_mult = 1. /. Float.log (Float.of_int num_neighbours) in
@@ -724,9 +738,15 @@ module MakeBatch(Distance : DISTANCE with type value = Lacaml.S.vec) = struct
       ~num_neighbours ~max_num_neighbours:num_neighbours ~max_num_neighbours0
       ~num_neighbours_search:num_neighbours_build ~level_mult
 
+  let build ~num_neighbours ~num_neighbours_build values =
+    count_distance "build" (fun () -> build ~num_neighbours ~num_neighbours_build values)
+  
   let knn (hgraph : t) (point : value) ~num_neighbours_search ~num_neighbours =
     Knn.knn hgraph point ~num_neighbours ~num_neighbours_search
 
+  let knn (hgraph : t) (point : value) ~num_neighbours_search ~num_neighbours =
+    count_distance "knn" (fun () -> knn hgraph point ~num_neighbours_search ~num_neighbours)
+  
   let knn_batch hgraph batch ~num_neighbours_search ~num_neighbours =
     let distances = Lacaml.S.Mat.create num_neighbours (Lacaml.S.Mat.dim2 batch) in
     Lacaml.S.Mat.fill distances Float.infinity;
