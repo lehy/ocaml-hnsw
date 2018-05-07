@@ -31,8 +31,6 @@ end
 (* end *)
 
 module NeighbourList = struct
-  (* gah! I wish I knew how to just say module Neighbours = Set
-     with type t = Set.M(Int) or whatever *)
   type t = { list : int list; length : int } [@@deriving sexp]
 
   let create () = { list=[]; length=0 }
