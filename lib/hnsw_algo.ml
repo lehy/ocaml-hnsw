@@ -571,6 +571,7 @@ useful they are.
       ~value ~distance ?(do_not_isolate=false)
       (current_neighbour_fold : init:'acc -> f:('acc -> Graph.node value_distance -> 'acc) -> 'acc)
       (num_neighbours : int) : Graph.Neighbours.t =
+    (*  XXX optimize this  *)
     let is_closer (node : MinHeap.Element.t) neighbours =
       let node_value = value node.node in
       Graph.Neighbours.for_all neighbours ~f:(fun neighbour ->
@@ -581,24 +582,28 @@ useful they are.
 
        tried moving do_not_isolate check out of the loop but
        current_neighbour_fold is monomorphic on 'acc :( *)
-    let new_neighbours, min_heap = 
-      current_neighbour_fold ~init:(Graph.Neighbours.create (), MinHeap.create ())
-        ~f:(fun (new_neighbours, min_heap) neighbour ->
+    let num_candidates, new_neighbours, min_heap = 
+      current_neighbour_fold ~init:(0, Graph.Neighbours.create (), MinHeap.create ())
+        ~f:(fun (num_candidates, new_neighbours, min_heap) neighbour ->
             if do_not_isolate && Graph.Neighbours.length (Graph.adjacent g neighbour.node) <= 1 then
-              Graph.Neighbours.add new_neighbours neighbour.node, min_heap
+              num_candidates+1, Graph.Neighbours.add new_neighbours neighbour.node, min_heap
             else
-              new_neighbours, MinHeap.add min_heap neighbour)
+              num_candidates+1, new_neighbours, MinHeap.add min_heap neighbour)
     in
-    let ret = MinHeap.fold_near_to_far_until min_heap ~init:new_neighbours ~f:(fun neighbours node ->
+    if num_candidates <= num_neighbours then
+      (* XXXX not in algo in paper, but in the hnsw code: just return
+         all the candidates *)
+      MinHeap.fold min_heap ~init:new_neighbours ~f:(fun acc e -> Graph.Neighbours.add acc e.node)
+    else let ret = MinHeap.fold_near_to_far_until min_heap ~init:new_neighbours ~f:(fun neighbours node ->
         if is_closer node neighbours then begin
           let neighbours = Graph.Neighbours.add neighbours node.node in
           if Graph.Neighbours.length neighbours >= num_neighbours then MinHeap.Stop neighbours
           else MinHeap.Continue neighbours
         end else MinHeap.Continue neighbours
       )
-    in
-    assert (not @@ Graph.Neighbours.is_empty ret);
-    ret
+      in
+      assert (not @@ Graph.Neighbours.is_empty ret);
+      ret
 end
 
 module BuildBase
