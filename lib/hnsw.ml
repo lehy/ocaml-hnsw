@@ -329,6 +329,9 @@ module Hgraph(Values : VALUES)(Distance : DISTANCE) = struct
     (* next_available_node : int *)
   } [@@deriving sexp]
 
+  let fold_layers ~init ~f h =
+    Map.fold h.layers ~init ~f
+  
   module Stats = struct
     type mima = { min : int; max : int; mean : float; isolated : int list } [@@deriving sexp]
     type t = {
