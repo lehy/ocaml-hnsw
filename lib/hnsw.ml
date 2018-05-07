@@ -64,18 +64,6 @@ module MapGraph = struct
   (* type nonrec value = value [@@deriving sexp] *)
   type node = int [@@deriving sexp]
 
-  module Visited = struct
-    type t = Set.M(Int).t [@@deriving sexp]
-    let create () = Set.empty (module Int)
-    (* type visit = Already_visited | New_visit of t *)
-    (* let visit visited node = *)
-    (*   let new_visited = Set.add visited node in *)
-    (*   if phys_equal new_visited visited then Already_visited *)
-    (*   else New_visit new_visited *)
-    let mem visited node = Set.mem visited node
-    let add visited node = Set.add visited node
-  end
-
   module Neighbours = NeighbourList
 
   type t = {
