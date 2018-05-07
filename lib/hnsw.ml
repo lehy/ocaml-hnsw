@@ -31,28 +31,32 @@ end
 (* end *)
 
 module NeighbourList = struct
-  (* gah! I wish I knew how to just say module Neighbours = Set
-     with type t = Set.M(Int) or whatever *)
-  type t = int list [@@deriving sexp]
+  type t = { list : int list; length : int } [@@deriving sexp]
 
-  let create () = []
-  let singleton n = [n]
-  let add n node = node::n
-  let remove n node = List.filter n ~f:(fun x -> x <> node)
-  let length c = List.length c
-  let for_all n ~f = List.for_all n ~f
+  let create () = { list=[]; length=0 }
+  let singleton n = { list=[n]; length=1 }
+  let add n node = { list=node::n.list; length=n.length+1 }
+  let remove n node = let l = List.filter n.list ~f:(fun x -> x <> node) in
+    { list=l; length=List.length l} (*  XXX could optimize length computation  *)
+  let length c = c.length
+  let for_all n ~f = List.for_all n.list ~f
   let fold c ~init ~f =
-    List.fold_left c ~init ~f
+    List.fold_left c.list ~init ~f
 
   (* let diff a b = *)
   (*   Set.diff a b *)
 
   let diff_both a b =
-    let sa = Set.of_list (module Int) a in
-    let sb = Set.of_list (module Int) b in
-    Set.to_list (Set.diff sb sa), Set.to_list (Set.diff sa sb)
+    let sa = Set.of_list (module Int) a.list in
+    let sb = Set.of_list (module Int) b.list in
+    let dba = Set.diff sb sa in
+    let dab = Set.diff sa sb in
+    dba, dab
 
-      (* let union a b = Set.union a b *)
+  let is_empty n = match n.list with
+    | [] -> true
+    | _ -> false
+  (* let union a b = Set.union a b *)
 end
 
 module MapGraph = struct
@@ -78,8 +82,40 @@ module MapGraph = struct
     (* values : value Map.M(Int).t; *)
     connections : Neighbours.t Map.M(Int).t;
     (* next_available_node : int *)
+    max_node_id : int
   } [@@deriving sexp]
 
+  let max_node_id x = x.max_node_id
+
+  (* module VisitedSet = struct
+   *   type t_graph = t
+   *   type t = Set.M(Int).t [@@deriving sexp]
+   *   let create graph = Set.empty (module Int)
+   *   (\* type visit = Already_visited | New_visit of t *\)
+   *   (\* let visit visited node = *\)
+   *   (\*   let new_visited = Set.add visited node in *\)
+   *   (\*   if phys_equal new_visited visited then Already_visited *\)
+   *   (\*   else New_visit new_visited *\)
+   *   let mem visited node = Set.mem visited node
+   *   let add visited node = Set.add visited node
+   * end *)
+
+  module VisitedArray = struct
+    type t_graph = t
+    type t = bool array [@@deriving sexp]
+    let create graph = Array.create ~len:(max_node_id graph + 1) false
+    (* type visit = Already_visited | New_visit of t *)
+    (* let visit visited node = *)
+    (*   let new_visited = Set.add visited node in *)
+    (*   if phys_equal new_visited visited then Already_visited *)
+    (*   else New_visit new_visited *)
+    let mem visited node = visited.(node)
+    let add visited node = visited.(node) <- true; visited
+    let length a = Array.fold a ~init:0 ~f:(fun acc e -> if e then acc+1 else acc)
+  end
+
+  module Visited = VisitedArray
+  
   (*  XXX TODO: check symmetric  *)
   let invariant x = true
   (* let invariant x = *)
@@ -87,9 +123,10 @@ module MapGraph = struct
   (*       Map.mem x.values key && Neighbours.for_all data ~f:(Map.mem x.values)) *)
 
 
-  let create () =
+  let create max_node_id =
     { (* values; *)
       connections = Map.empty (module Int);
+      max_node_id
       (* next_available_node = 0 *) }
 
   let fold_neighbours g node ~init ~f =
@@ -105,19 +142,21 @@ module MapGraph = struct
     | None -> Neighbours.create ()(* Set.empty (module Int) *)
     | Some neighbours -> neighbours
 
+  let num_nodes g = Map.length g.connections
+  
   let connect_symmetric g node neighbours =
     (* assert (invariant g); *)
     (* assert (Neighbours.for_all neighbours ~f:(Map.mem g.values)); *)
     (* assert (Map.mem g.values node); *)
     let connections = Map.set g.connections node neighbours in
     let g =
-      { connections = Neighbours.fold neighbours ~init:connections
-            ~f:(fun connections neighbour ->
-                let neighbours_of_neighbour = match Map.find connections neighbour with
-                  | None -> Neighbours.singleton node
-                  | Some old_neighbours -> Neighbours.add old_neighbours node
-                in
-                Map.set connections neighbour neighbours_of_neighbour) }
+      { g with connections = Neighbours.fold neighbours ~init:connections
+                   ~f:(fun connections neighbour ->
+                       let neighbours_of_neighbour = match Map.find connections neighbour with
+                         | None -> Neighbours.singleton node
+                         | Some old_neighbours -> Neighbours.add old_neighbours node
+                       in
+                       Map.set connections neighbour neighbours_of_neighbour) }
     in
     (* assert (invariant g); *)
     g
@@ -167,7 +206,21 @@ module MapGraph = struct
   (*   (\* assert (invariant g); *\) *)
   (*   g *)
 
+  let isolated layer =
+    Map.fold layer.connections ~init:([]) ~f:(fun ~key ~data acc ->
+        if Neighbours.is_empty data then key::acc else acc)
+
+  let check_isolated layer context =
+    match isolated layer with
+    | [] -> []
+    | iso -> printf "%s: isolated: %s\n%!" context (Sexp.to_string_hum @@ [%sexp_of : int list] iso); iso
+  
   let set_connections layer node neighbours =
+    (* if Neighbours.is_empty neighbours then *)
+      (* printf "set_connections %d called with no neighbours\n%!" node; *)
+    (* let _ = check_isolated layer (Printf.sprintf "before set_connections %d %s" node
+     *                                 (Sexp.to_string_hum @@ [%sexp_of : Neighbours.t] neighbours))
+     * in *)
     let old_neighbours = adjacent layer node in
     let added_neighbours, removed_neighbours = Neighbours.diff_both old_neighbours neighbours in
     (* let added_neighbours = Neighbours.diff neighbours old_neighbours in *)
@@ -180,20 +233,31 @@ module MapGraph = struct
         | Some _ -> neighbours)
     in
     (*  2. remove link to node from removed connections  *)
-    let connections = Neighbours.fold removed_neighbours ~init:connections
+    let connections = Set.fold removed_neighbours ~init:connections
         ~f:(fun connections removed_neighbour ->
             Map.update connections removed_neighbour ~f:(function
                 | None -> assert false
                 | Some old -> Neighbours.remove old node))
     in
     (*  2. add link to node to added connections  *)
-    let connections = Neighbours.fold added_neighbours ~init:connections
+    let connections = Set.fold added_neighbours ~init:connections
         ~f:(fun connections added_neighbour ->
             Map.update connections added_neighbour ~f:(function
                 | None -> Neighbours.singleton node
                 | Some old -> Neighbours.add old node))
     in
-    { connections }
+    let ret = { layer with connections } in
+    (* let iso = check_isolated ret (Printf.sprintf "after set_connections %d %s" node
+     *                                 (Sexp.to_string_hum @@ [%sexp_of : Neighbours.t] neighbours))
+     * in *)
+    (* List.iter iso ~f:(fun n -> printf "previous neighbours of %d: %s\n%!"
+     *                      n (Sexp.to_string_hum @@ [%sexp_of : Neighbours.t] @@ adjacent layer n)); *)
+    (* Neighbours.fold neighbours ~init:() ~f:(fun () n ->
+     *     let nn = adjacent { layer with connections } n in
+     *     if Neighbours.is_empty nn then
+     *       printf "after set_connections %d %s, %d has no neighbours\n%!"
+     *         node (Sexp.to_string_hum (Neighbours.sexp_of_t neighbours)) n); *)
+    ret
 end
 
 module type VALUE = sig
@@ -205,7 +269,7 @@ module type VALUES = (* functor (Value : VALUE) -> *) sig
   (* type value [@@deriving sexp] *)
   type t [@@deriving sexp]
   type value [@@deriving sexp]
-  
+
   val length : t -> int
   val value : t -> int -> value
 end
@@ -237,7 +301,7 @@ module BaValues = struct
   type node = int [@@deriving sexp]
   type t = Lacaml.S.mat sexp_opaque [@@deriving sexp]
   type value = Lacaml.S.vec sexp_opaque [@@deriving sexp]
-  
+
   let create ba = ba
   let length m = Lacaml.S.Mat.dim2 m
   let value m k = Lacaml.S.Mat.col m k
@@ -278,19 +342,20 @@ module Hgraph(Values : VALUES)(Distance : DISTANCE) = struct
   } [@@deriving sexp]
 
   module Stats = struct
-    type mima = { min : int; max : int; mean : float} [@@deriving sexp]
+    type mima = { min : int; max : int; mean : float; isolated : int list } [@@deriving sexp]
     type t = {
       num_nodes : int;
       layer_sizes : int Map.M(Int).t;
-      layer_connectivity : mima Map.M(Int).t
+      layer_connectivity : mima Map.M(Int).t;
     } [@@deriving sexp]
 
     let min_max_connectivity g =
-      let mi, ma, n, sum =
-        Map.fold g.LayerGraph.connections ~init:(1000000, -1, 0, 0.) ~f:(fun ~key ~data (mi, ma, n, sum) ->
+      let mi, ma, n, sum, isolated =
+        Map.fold g.LayerGraph.connections ~init:(1000000, -1, 0, 0., []) ~f:(fun ~key ~data (mi, ma, n, sum, isolated) ->
             let num_neighbours = LayerGraph.Neighbours.length data in
-            (min num_neighbours mi, max num_neighbours ma, n+1, sum+.Float.of_int num_neighbours))
-      in { min=mi; max=ma; mean= sum /. Float.of_int n }
+            let isolated = if num_neighbours > 0 then isolated else key::isolated in
+            (min num_neighbours mi, max num_neighbours ma, n+1, sum+.Float.of_int num_neighbours, isolated))
+      in { min=mi; max=ma; mean= sum /. Float.of_int n; isolated }
 
     let compute hgraph =
       {
@@ -319,12 +384,14 @@ module Hgraph(Values : VALUES)(Distance : DISTANCE) = struct
       (* next_available_node = 0 *)
     }
 
+  let max_node_id g = Values.length g.values
+  
   let is_empty h = h.entry_point < 0 (* Map.is_empty h.values *)
 
   (* let layer hgraph i = Map.find_exn hgraph.layers i *)
   let layer hgraph i = match Map.find hgraph.layers i with
     | Some layer -> layer
-    | None -> LayerGraph.create ()
+    | None -> LayerGraph.create (max_node_id hgraph)
 
   let max_layer hgraph = hgraph.max_layer
   let set_max_layer hgraph m =
@@ -337,7 +404,7 @@ module Hgraph(Values : VALUES)(Distance : DISTANCE) = struct
      not a problem. *)
   let entry_point h = h.entry_point
   let set_entry_point h p =
-    printf "setting entry point: %d\n%!" p;
+    (* printf "setting entry point: %d\n%!" p; *)
     { h with entry_point = p }
 
   (* let allocate_node h = *)
@@ -639,7 +706,7 @@ module MakeSimple(Distance : DISTANCE) = struct
   type t = Hgraph.t
   type value = Distance.value
 
-  let build ?(num_neighbours=5) ?(num_neighbours_build=100) fold_rows =
+  let build ~num_neighbours ~num_neighbours_build fold_rows =
     let max_num_neighbours0 = 2 * num_neighbours in
     let level_mult = 1. /. Float.log (Float.of_int num_neighbours) in
     Build.create fold_rows
@@ -651,6 +718,13 @@ module MakeSimple(Distance : DISTANCE) = struct
 end
 
 module MakeBatch(Distance : DISTANCE with type value = Lacaml.S.vec) = struct
+  module Distance = struct
+    type value = Distance.value [@@deriving sexp]
+    let num_calls = ref 0
+    let distance a b =
+      Int.incr num_calls;
+      Distance.distance a b
+  end
   module Hgraph = HgraphBatch(Distance)
   module VisitMe = VisitMe(Distance)(Hgraph)
   module Nearest = Nearest(Distance)(Hgraph)
@@ -660,18 +734,32 @@ module MakeBatch(Distance : DISTANCE with type value = Lacaml.S.vec) = struct
   type t = Hgraph.t
   type value = Distance.value
 
-  let build ?(num_neighbours=5) ?(num_neighbours_build=100) values =
+  let count_distance name f =
+    let n0 = !Distance.num_calls in
+    let ret = f () in
+    let dn = !Distance.num_calls - n0 in
+    printf "%s: %d distance computations\n" name dn;
+    ret
+  
+  let build ~num_neighbours ~num_neighbours_build values =
     let max_num_neighbours0 = 2 * num_neighbours in
     let level_mult = 1. /. Float.log (Float.of_int num_neighbours) in
     Build.create values
       ~num_neighbours ~max_num_neighbours:num_neighbours ~max_num_neighbours0
       ~num_neighbours_search:num_neighbours_build ~level_mult
 
+  let build ~num_neighbours ~num_neighbours_build values =
+    count_distance "build" (fun () -> build ~num_neighbours ~num_neighbours_build values)
+  
   let knn (hgraph : t) (point : value) ~num_neighbours_search ~num_neighbours =
     Knn.knn hgraph point ~num_neighbours ~num_neighbours_search
 
+  let knn (hgraph : t) (point : value) ~num_neighbours_search ~num_neighbours =
+    count_distance "knn" (fun () -> knn hgraph point ~num_neighbours_search ~num_neighbours)
+  
   let knn_batch hgraph batch ~num_neighbours_search ~num_neighbours =
     let distances = Lacaml.S.Mat.create num_neighbours (Lacaml.S.Mat.dim2 batch) in
+    Lacaml.S.Mat.fill distances Float.infinity;
     let _ = Hgraph.Values.foldi batch ~init:() ~f:(fun () j row ->
         let neighbours = knn hgraph row ~num_neighbours_search ~num_neighbours in
         List.iteri neighbours ~f:(fun i { Hnsw_algo.distance_to_target; _ } ->
@@ -697,7 +785,7 @@ end
 module Make(Batch : BATCH) = struct
   include MakeSimple(Batch)
 
-  let build_batch ?(num_neighbours=5) ?(num_neighbours_build=100) data =
+  let build_batch ~num_neighbours ~num_neighbours_build data =
     build ~num_neighbours ~num_neighbours_build (Batch.fold data)
 
   let knn_batch hgraph batch ~num_neighbours_search ~num_neighbours =
@@ -766,4 +854,4 @@ module Ba = BatchEuclidean
     DONE create HgraphBatch
     - create MakeBatch
     - make Ba use MakeBatch instead of MakeSimple
-  *)
+*)

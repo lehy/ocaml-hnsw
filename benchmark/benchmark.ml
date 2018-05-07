@@ -2,6 +2,8 @@ open Base
 open Stdio
 open Hdf5_caml
 
+let () = Random.init 0;;
+
 module Distance = struct
   type t =
     | Euclidean
@@ -52,6 +54,22 @@ end
 (*   H5a.close att; *)
 (*   Bytes.unsafe_to_string buf *)
 
+let brute_force_knn_l2 train test k =
+  let num_test = Lacaml.S.Mat.dim2 test in
+  let num_train = Lacaml.S.Mat.dim2 train in
+  let ret = Lacaml.S.Mat.make k num_test Float.nan in
+  for i = 1 to num_test do
+    let test_col = Lacaml.S.Mat.col test i in
+    let dists = Lacaml.S.Vec.make num_train Float.nan in
+    for j = 1 to num_train do
+      dists.{j} <- Hnsw.EuclideanBa.distance (Lacaml.S.Mat.col train j) test_col
+    done;
+    Lacaml.S.Vec.sort dists;
+    for j = 1 to k do
+      ret.{j,i} <- dists.{j}
+    done
+  done;
+  ret;;
 
 module Dataset = struct
   type t = {
@@ -67,7 +85,20 @@ module Dataset = struct
     (*  metric for comparing vectors  *)
     distance : Distance.t
   }
-
+  
+  let random ~dim ~num_train ~num_test ~k =
+    let train = Lacaml.S.Mat.random dim num_train in
+    let test = Lacaml.S.Mat.random dim num_test in
+    let ret = {
+      train;
+      test;
+      test_distances = brute_force_knn_l2 train test k (* Lacaml.S.Mat.random k num_test *);
+      distance = Distance.Euclidean
+    }
+    in
+    (* Format.printf "distances:\n%a\n%!" Lacaml.S.pp_mat ret.test_distances; *)
+    ret
+  
   module Sexp_of_t = struct
     type dataset = t
     type t = { train : int * int;
@@ -121,7 +152,10 @@ let nans_like a =
   ret
 
 module Recall = struct
+  (*  XXX check computation  *)
   let compute ?(epsilon=1e-8) expected got =
+    Format.printf "recall: expected:@,  @[%a@]@." Lacaml.S.pp_mat expected;
+    Format.printf "recall: got:@,  @[%a@]@." Lacaml.S.pp_mat got;
     let module A = Bigarray.Array2 in
     if A.dim1 expected <> A.dim1 got || A.dim2 expected <> A.dim2 got then
       invalid_arg "Recall.compute: arrrays have unequal shapes";
@@ -141,14 +175,18 @@ module Recall = struct
     !ret /. (Float.of_int num_queries)
 end
 
-let read_data () =
-  let data = Dataset.read "fashion-mnist-784-euclidean.hdf5" ~limit_train:2000 ~limit_test:5000 in
+let read_data ?limit_train ?limit_test () =
+  let data = Dataset.read "fashion-mnist-784-euclidean.hdf5" ?limit_train ?limit_test in
+  (* let data = Dataset.random ~num_train:limit_train ~num_test:limit_test ~k:100 ~dim:784 in *)
   printf "read dataset: %s\n" (Sexp.to_string_hum @@ Dataset.sexp_of_t data);
   data
 
-let build_index data =
+let random_data ~num_train ~num_test ~k ~dim =
+  Dataset.random ~num_train ~num_test ~k ~dim
+
+let build_index ?(num_neighbours=5) ?(num_neighbours_build=10) data =
   let t0 = Unix.gettimeofday () in
-  let hgraph = Hnsw.Ba.build ~num_neighbours:10 ~num_neighbours_build:400 data.Dataset.train in
+  let hgraph = Hnsw.Ba.build ~num_neighbours ~num_neighbours_build data.Dataset.train in
   let t1 = Unix.gettimeofday () in
   printf "index construction: %f s\n%!" (t1-.t0);
   let stats = Hnsw.Ba.Hgraph.Stats.compute hgraph in
@@ -157,6 +195,7 @@ let build_index data =
 
 let test (data : Dataset.t) hgraph =
   let num_neighbours = Bigarray.Array2.dim1 data.test_distances in
+  printf "bench: num_neighbours: %d\n" num_neighbours;
   let t1 = Unix.gettimeofday () in
   let got_distances =
     Hnsw.Ba.knn_batch hgraph data.test ~num_neighbours ~num_neighbours_search:num_neighbours
@@ -170,8 +209,9 @@ let test (data : Dataset.t) hgraph =
 
 
 let main () =
-  let data = read_data () in
-  let hgraph = build_index data in
+  (* let data = read_data ~limit_train:10000 ~limit_test:10 () in *)
+  let data = random_data ~num_train:10000 ~num_test:10 ~dim:784 ~k:10 in
+  let hgraph = build_index data ~num_neighbours:5 ~num_neighbours_build:10 in
   match Caml.Sys.argv.(1) with
   | "index" -> ()
   | _ -> test data hgraph
@@ -187,5 +227,9 @@ main ();;
       - Map.find (probably values + neighbours) -> convert values to just our Bigarray
       - Set.fold -> convert sets to lists?
     + try to benchmark index creation and querying separately
+
+new TODO:
+- l2 distance computation is on par with what C++ does (even a bit better!)
+- simple random tests show that our recall is very weak (like 1/2% even with num neighbours build = 400: investigate
 
 *)
