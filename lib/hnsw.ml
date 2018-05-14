@@ -88,21 +88,39 @@ module MapGraph = struct
    *   let add visited node = Set.add visited node
    * end *)
 
-  module VisitedArray = struct
+  (* module VisitedArray = struct
+   *   type t_graph = t
+   *   type t = bool array [@@deriving sexp]
+   *   let create graph = Array.create ~len:(max_node_id graph + 1) false
+   *   (\* type visit = Already_visited | New_visit of t *\)
+   *   (\* let visit visited node = *\)
+   *   (\*   let new_visited = Set.add visited node in *\)
+   *   (\*   if phys_equal new_visited visited then Already_visited *\)
+   *   (\*   else New_visit new_visited *\)
+   *   let mem visited node = visited.(node)
+   *   let add visited node = visited.(node) <- true; visited
+   *   let length a = Array.fold a ~init:0 ~f:(fun acc e -> if e then acc+1 else acc)
+   * end *)
+
+  module VisitedIntArray = struct
     type t_graph = t
-    type t = bool array [@@deriving sexp]
-    let create graph = Array.create ~len:(max_node_id graph + 1) false
+    type t = { visited : int array; mutable epoch : int } [@@deriving sexp]
+    let create graph = { visited = Array.create ~len:(max_node_id graph + 1) 0; epoch = 1 }
     (* type visit = Already_visited | New_visit of t *)
     (* let visit visited node = *)
     (*   let new_visited = Set.add visited node in *)
     (*   if phys_equal new_visited visited then Already_visited *)
     (*   else New_visit new_visited *)
-    let mem visited node = visited.(node)
-    let add visited node = visited.(node) <- true; visited
-    let length a = Array.fold a ~init:0 ~f:(fun acc e -> if e then acc+1 else acc)
+    let mem visited node = visited.visited.(node) >= visited.epoch
+    let add visited node = visited.visited.(node) <- visited.epoch; visited
+    let length a = Array.fold a.visited ~init:0 ~f:(fun acc e -> if e >= a.epoch then acc+1 else acc)
+    let clear (visited : t) =
+      visited.epoch <- visited.epoch + 1;
+      visited
+      (* { visited with epoch = visited.epoch+1 } *)
   end
-
-  module Visited = VisitedArray
+  
+  module Visited = VisitedIntArray
   
   (*  XXX TODO: check symmetric  *)
   let invariant x = true
