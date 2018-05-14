@@ -195,6 +195,7 @@ module type SEARCH_GRAPH = sig
     val add : t -> node -> t
     val mem : t -> node -> bool
     val length : t -> int
+    val clear : t -> t
   end
 
   module Neighbours : sig
@@ -338,12 +339,6 @@ wQueue = nearest
   module Neighbours = Graph.Neighbours
   let distance = Distance.distance
 
-  let visited_of_visit_me graph visit_me =
-    VisitMe.fold visit_me ~init:(Visited.create graph) ~f:Visited.add
-
-  let visited_singleton graph node =
-    Visited.add (Visited.create graph) node
-
   let nearest_of_visit_me hgraph target visit_me ~size_nearest =
     VisitMe.fold visit_me ~init:(Nearest.create hgraph target ~ef:size_nearest)
       ~f:(fun (nearest : Nearest.t) node ->
@@ -352,7 +347,7 @@ wQueue = nearest
           | Too_far -> nearest
           | Inserted nearest -> nearest)
 
-  let search (hgraph : Value.t) (graph : Graph.t) (start_nodes : VisitMe.t)
+  let search (hgraph : Value.t) (graph : Graph.t) (visited : Visited.t) (start_nodes : VisitMe.t)
       (target : Value.value) (size_nearest : int) =
 
     let visit ((visit_me, nearest, visited) as acc) neighbour =
@@ -389,10 +384,13 @@ wQueue = nearest
           in aux visit_me nearest visited
         end
     in
+    let visited_of_visit_me visit_me =
+      VisitMe.fold visit_me ~init:(Visited.clear visited) ~f:Visited.add
+    in
     aux start_nodes (nearest_of_visit_me hgraph target start_nodes ~size_nearest)
-      (visited_of_visit_me graph start_nodes)
+      (visited_of_visit_me start_nodes)
 
-  let search_one hgraph graph (start_node : Graph.node value_distance) target =
+  let search_one hgraph graph (visited : Visited.t) (start_node : Graph.node value_distance) target =
 
     let visit ((visit_me, (nearest : Graph.node value_distance), visited) as acc) neighbour =
       if Visited.mem visited neighbour then acc
@@ -432,7 +430,11 @@ wQueue = nearest
     (*   node=start_node; distance_to_target=distance (Value.value hgraph start_node) target *)
     (* } *)
     (* in *)
-    aux (VisitMe.singleton hgraph target start_node) start_node (visited_singleton graph start_node.node)
+    let visited_singleton node =
+      Visited.add (Visited.clear visited) node
+    in
+    aux (VisitMe.singleton hgraph target start_node)
+      start_node (visited_singleton start_node.node)
 end
 
 module type HGRAPH_BASE = sig
@@ -455,6 +457,7 @@ module type HGRAPH_BASE = sig
       val mem : t -> node -> bool
       val add : t -> node -> t
       val length : t -> int
+      val clear : t -> t
     end
 
     module Neighbours : sig
@@ -623,7 +626,8 @@ module BuildBase
   module SearchLayer = Search(Layer)(VisitMe)(Nearest)(Distance)(Hgraph)
   module SelectNeighbours = SelectNeighbours(Layer)(Distance)(Hgraph)
 
-  let insert_knowing_node hgraph point_node point ~num_neighbours ~max_num_neighbours ~max_num_neighbours0
+  let insert_knowing_node hgraph point_node visited point
+      ~num_neighbours ~max_num_neighbours ~max_num_neighbours0
       ~num_neighbours_search ~level_mult =
 
     let value_distance node =
@@ -646,7 +650,7 @@ module BuildBase
         else
           let start_node =
             (* printf "insert: search_one in upper layer %d\n%!" i_layer; *)
-            SearchLayer.search_one hgraph (Hgraph.layer hgraph i_layer) start_node point
+            SearchLayer.search_one hgraph (Hgraph.layer hgraph i_layer) visited start_node point
           in
           search_upper_layers (i_layer - 1) start_node
       in
@@ -656,7 +660,7 @@ module BuildBase
           let layer_graph = Hgraph.layer hgraph i_layer in
           let max_num_neighbours = if i_layer = 0 then max_num_neighbours0 else max_num_neighbours in
           (* printf "insert: search in lower layer %d\n%!" i_layer; *)
-          let nearest = SearchLayer.search hgraph layer_graph start_nodes point num_neighbours_search in
+          let nearest = SearchLayer.search hgraph layer_graph visited start_nodes point num_neighbours_search in
           let neighbours = SelectNeighbours.select_neighbours
               hgraph
               ~value:(Hgraph.value hgraph)
@@ -896,15 +900,18 @@ Notes:
   (*       Hgraph.set_max_layer (Hgraph.set_entry_point hgraph point_node) level *)
   (*     else hgraph *)
 
-  let insert hgraph point =
+  let insert hgraph visited point =
+    (* XXX passing visited around is starting to be annoying. Could
+       the graph manage the visited itself?  *)
     let hgraph, node = Hgraph.allocate hgraph point in
-    insert_knowing_node hgraph node point
+    insert_knowing_node hgraph node visited point
 
-  let create point_fold ~num_neighbours ~max_num_neighbours ~max_num_neighbours0
+  let create point_fold visited
+      ~num_neighbours ~max_num_neighbours ~max_num_neighbours0
       ~num_neighbours_search ~level_mult =
     point_fold ~init:(Hgraph.create ()) ~f:(fun hgraph point ->
         let hgraph =
-          insert hgraph point ~num_neighbours ~max_num_neighbours ~max_num_neighbours0
+          insert hgraph visited point ~num_neighbours ~max_num_neighbours ~max_num_neighbours0
             ~num_neighbours_search ~level_mult
         in
         (* printf "graph after insert of %s:\n%s\n%!" *)
@@ -927,8 +934,12 @@ module BuildBatch
 
   let create points ~num_neighbours ~max_num_neighbours ~max_num_neighbours0
       ~num_neighbours_search ~level_mult =
-    Hgraph.Values.foldi points ~init:(Hgraph.create points) ~f:(fun hgraph i point ->
-        insert_knowing_node hgraph i point ~num_neighbours ~max_num_neighbours ~max_num_neighbours0
+    let hgraph = Hgraph.create points in
+    (* XXX this accessing the 0th layer of the hgraph to create
+       visited is disgusting *)
+    let visited = Hgraph.LayerGraph.Visited.create (Hgraph.layer hgraph 0) in
+    Hgraph.Values.foldi points ~init:hgraph ~f:(fun hgraph i point ->
+        insert_knowing_node hgraph i visited point ~num_neighbours ~max_num_neighbours ~max_num_neighbours0
           ~num_neighbours_search ~level_mult)
 end
 
@@ -980,11 +991,12 @@ module Knn
 
   let knn hgraph target ?(num_neighbours_search=5) ~num_neighbours =
     (* printf "knn: n_search: %d n:%d\n" num_neighbours_search num_neighbours; *)
+    let visited = Hgraph.LayerGraph.Visited.create (Hgraph.layer hgraph 0) in
     let rec search_upper i_layer start_node =
       if i_layer <= 0 then start_node
       else
         search_upper (i_layer-1)
-          (Search.search_one hgraph (Hgraph.layer hgraph i_layer) start_node target)
+          (Search.search_one hgraph (Hgraph.layer hgraph i_layer) visited start_node target)
     in
 
     let value_distance node =
@@ -995,7 +1007,8 @@ module Knn
       search_upper (Hgraph.max_layer hgraph) (value_distance (Hgraph.entry_point hgraph))
     in
     let nearest =
-      Search.search hgraph (Hgraph.layer hgraph 0) (VisitMe.singleton hgraph target start_node_zero)
+      Search.search hgraph (Hgraph.layer hgraph 0) visited
+        (VisitMe.singleton hgraph target start_node_zero)
         target num_neighbours_search
     in Nearest.nearest_k nearest num_neighbours
 

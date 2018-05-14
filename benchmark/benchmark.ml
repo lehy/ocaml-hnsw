@@ -154,8 +154,8 @@ let nans_like a =
 module Recall = struct
   (*  XXX check computation  *)
   let compute ?(epsilon=1e-8) expected got =
-    Format.printf "recall: expected:@,  @[%a@]@." Lacaml.S.pp_mat expected;
-    Format.printf "recall: got:@,  @[%a@]@." Lacaml.S.pp_mat got;
+    Caml.Format.printf "recall: expected:@,  @[%a@]@." Lacaml.S.pp_mat expected;
+    Caml.Format.printf "recall: got:@,  @[%a@]@." Lacaml.S.pp_mat got;
     let module A = Bigarray.Array2 in
     if A.dim1 expected <> A.dim1 got || A.dim2 expected <> A.dim2 got then
       invalid_arg "Recall.compute: arrrays have unequal shapes";
@@ -211,7 +211,7 @@ let test (data : Dataset.t) hgraph =
 let main () =
   (* let data = read_data ~limit_train:10000 ~limit_test:10 () in *)
   let data = random_data ~num_train:10000 ~num_test:10 ~dim:784 ~k:10 in
-  let hgraph = build_index data ~num_neighbours:5 ~num_neighbours_build:10 in
+  let hgraph = build_index data ~num_neighbours:7 ~num_neighbours_build:100 in
   match Caml.Sys.argv.(1) with
   | "index" -> ()
   | _ -> test data hgraph
