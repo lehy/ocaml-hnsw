@@ -864,3 +864,4 @@ module Ba = BatchEuclidean
     - create MakeBatch
     - make Ba use MakeBatch instead of MakeSimple
 *)
+module Ohnsw = Ohnsw

@@ -2,10 +2,11 @@
 
 (executable
  ((name            benchmark)
-  (libraries       (hnsw base stdio hdf5_caml))
+  (modules (dataset benchmark))
+  (libraries       (hnsw core_kernel stdio hdf5_caml))
   (preprocess (pps (ppx_jane)))))
 
-(alias
- ((name    runtest)
-  (deps    (benchmark.exe))
-  (action  (run ${<}))))
+; (alias
+;  ((name    runtest)
+;   (deps    (benchmark.exe))
+;   (action  (run ${<}))))
