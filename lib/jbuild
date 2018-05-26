@@ -3,5 +3,7 @@
 (library
  ((name            hnsw)
   (public_name     hnsw)
-  (libraries       (base lacaml stdio))
+  (modules (hnsw_algo hnsw ohnsw))
+  (libraries       (core_kernel lacaml stdio))
   (preprocess (pps (ppx_jane)))))
+

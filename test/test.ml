@@ -1,9 +1,10 @@
-open Base
+open Core_kernel
 open Stdio
 
-let show_hgraph_inside chan hgraph =
-  let module Hgraph = Hnsw.Ba.Hgraph in
+module Ohnsw = Hnsw.Ohnsw
 
+let show_hgraph_inside chan hgraph =
+  let module Hgraph = Ohnsw.Hgraph in
   let pf fmt = Out_channel.fprintf chan fmt in
 
   let node_name ~layer_index node =
@@ -34,17 +35,17 @@ let show_hgraph_inside chan hgraph =
       name_a name_b color_scheme (layer_index+1)
   in
 
-  let show_layer layer_index (layer : Hnsw.Ba.Hgraph.LayerGraph.t) =
-    Map.iteri layer.connections ~f:(fun ~key ~data ->
-        show_node ~layer_index key;
-        Hgraph.LayerGraph.Neighbours.fold data ~init:() ~f:(fun () neighbour ->
-            show_connection ~layer_index key neighbour)
+  let show_layer layer_index (layer : Ohnsw.Graph.t) =
+    Ohnsw.Graph.iter_neighbours layer ~f:(fun node neighbours ->
+        show_node ~layer_index node;
+        Ohnsw.Neighbours.iter neighbours ~f:(fun neighbour ->
+            show_connection ~layer_index node neighbour)
       )
   in
 
-  Hgraph.fold_layers hgraph ~init:() ~f:(fun ~key ~data () ->
-      show_layer key data
-    )
+  for i = 0 to Hgraph.max_layer hgraph do
+    show_layer i (Hgraph.layer hgraph i)
+  done;;
 
 
 let show_hgraph hgraph filename =
@@ -55,18 +56,25 @@ let show_hgraph hgraph filename =
       pf "}\n")
 
 let show_neighbours hgraph point neighbours filename =
-  let module Hgraph = Hnsw.Ba.Hgraph in
+  let module Hgraph = Ohnsw.Hgraph in
   Out_channel.with_file filename ~f:(fun chan ->
       let pf fmt = Out_channel.fprintf chan fmt in
       pf "graph g {\n";
       show_hgraph_inside chan hgraph;
       pf "\"point\" [ pos=\"%f,%f!\" ]\n"
         point.{1} point.{2};
-      List.iteri neighbours ~f:(fun i (n : 'a Hnsw.value_distance) ->
-          let pos = Hgraph.value hgraph n.node in
+     let _ = Heap.fold neighbours ~init:0 ~f:(fun i (e : Ohnsw.HeapElt.t) ->
+          let pos = Hgraph.value hgraph e.node in
           pf "\"n%d\" [ pos=\"%f,%f!\" ]\n"
             i pos.{1} pos.{2};
-        );
+          i+1
+        )
+     in
+      (* List.iteri neighbours ~f:(fun i (n : 'a Hnsw.value_distance) ->
+       *     let pos = Hgraph.value hgraph n.node in
+       *     pf "\"n%d\" [ pos=\"%f,%f!\" ]\n"
+       *       i pos.{1} pos.{2};
+       *   ); *)
       pf "}\n")
 
 let random_data dim n =
@@ -91,6 +99,8 @@ let grid_data n =
   done;
   shuffle ret
 
+type vec = Lacaml.S.vec sexp_opaque [@@deriving sexp]
+
 let test_graphical () = ();;
 let dim = 2 in
 let n_train = 36 in
@@ -100,15 +110,18 @@ let train_data = grid_data n_train in
 let test_data = random_data dim n_test in
 Caml.Format.printf "train data:\n%a\n" Lacaml.S.pp_mat train_data;
 Caml.Format.printf "test data:\n%a\n" Lacaml.S.pp_mat test_data;
-let hgraph = Hnsw.Ba.build ~num_neighbours:3 ~num_neighbours_build:10 train_data in
-printf "graph:\n%s\n" (Sexp.to_string_hum @@ Hnsw.Ba.Hgraph.sexp_of_t hgraph);
+let hgraph = Ohnsw.build_batch_bigarray Ohnsw.distance_l2
+    ~num_connections:3 ~num_nodes_search_construction:10 train_data
+in
+printf "graph:\n%s\n" (Sexp.to_string_hum @@ Ohnsw.Hgraph.sexp_of_t sexp_of_vec hgraph);
 show_hgraph hgraph "hgraph.dot";
 let i = ref 0 in
 Lacaml.S.Mat.fold_cols (fun () point ->
-    let neighbours = Hnsw.Ba.knn hgraph point ~num_neighbours:2 ~num_neighbours_search:2 in
+    let visited = Ohnsw.Visited.create (Ohnsw.Graph.num_nodes (Ohnsw.Hgraph.layer hgraph 0)) in
+    let neighbours = Ohnsw.knn hgraph visited point ~k:2 in
     Caml.Format.printf "neighbours of %a:\n%s\n"
       Lacaml.S.pp_vec point
-      (Sexp.to_string_hum @@ [%sexp_of : Hnsw.Ba.Hgraph.node Hnsw.value_distance list] neighbours);
+      (Sexp.to_string_hum @@ [%sexp_of : Ohnsw.HeapElt.t Heap.t] neighbours);
     show_neighbours hgraph point neighbours (Printf.sprintf "neighbours_%03d.dot" !i);
     Int.incr i) () test_data;;
 (*  TODO:
