@@ -111,7 +111,7 @@ let test_data = random_data dim n_test in
 Caml.Format.printf "train data:\n%a\n" Lacaml.S.pp_mat train_data;
 Caml.Format.printf "test data:\n%a\n" Lacaml.S.pp_mat test_data;
 let hgraph = Ohnsw.build_batch_bigarray Ohnsw.distance_l2
-    ~num_connections:3 ~num_nodes_search_construction:10 train_data
+    ~num_connections:5 ~num_nodes_search_construction:20 train_data
 in
 printf "graph:\n%s\n" (Sexp.to_string_hum @@ Ohnsw.Hgraph.sexp_of_t sexp_of_vec hgraph);
 show_hgraph hgraph "hgraph.dot";
