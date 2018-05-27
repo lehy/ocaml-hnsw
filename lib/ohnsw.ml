@@ -48,7 +48,7 @@ module Vector = struct
       acc := f !acc v.buf.(i)
     done;
     !acc         
-  
+
   let length v = v.size
   let get v i =
     check_index_ v i;
@@ -62,6 +62,24 @@ module Vector = struct
     end;
     v.buf.(v.size) <- x;
     v.size <- v.size + 1
+
+  let%test _ = length (create 0) = 0
+  let%test _ = length (create_with ~capacity:56 0) = 0
+  let%test _ = capacity (create_with ~capacity:56 0) = 56
+  let%test _ = let a = create 0 in push_back a 42; length a = 1
+  let%test _ =
+    let a = create_with ~capacity:1 0 in
+    push_back a 1; push_back a 2; push_back a 3;
+    fold a ~init:0 ~f:(+) = 6
+  let%test _ =
+    let a = create_with ~capacity:1 0 in
+    push_back a 1; push_back a 2; push_back a 3;
+    get a 2 = 3 && get a 0 = 1
+  let%test _ =
+    let a = create_with ~capacity:2 0 in
+    push_back a 1; push_back a 2; push_back a 3;
+    set a 1 42;
+    get a 2 = 3 && get a 0 = 1 && get a 1 = 42
 end
 
 module Neighbours = struct
@@ -114,8 +132,10 @@ module Graph = struct
         f i neighbours;
         i+1)
     in ()
-  
+
   let set_connections (graph : t) (node : int) (neighbours : Neighbours.t) =
+    printf "setting connections from %d to %s\n%!"
+      node (Sexp.to_string_hum @@ Neighbours.sexp_of_t neighbours);
     let old_neighbours = Vector.get graph node in
     let added_neighbours, removed_neighbours = Neighbours.diff_both old_neighbours neighbours in
     (*  1. set the connections for the node  *)
@@ -177,7 +197,7 @@ module Hgraph = struct
 
   let distance h = h.distance
   let value h = h.value
-  
+
   let entry_point h = h.entry_point
   let set_entry_point h node = h.entry_point <- node
 
@@ -273,6 +293,8 @@ let search_k
 (*  destroys possible_neighbours_min_queue  *)
 let select_neighbours (graph : Graph.t) (distance : 'a distance) (value : 'a value)
     (possible_neighbours_min_queue : HeapElt.t Heap.t) (num_neighbours : int) =
+  printf "selecting %d neighbours from %s\n%!"
+    num_neighbours (Sexp.to_string_hum @@ Heap.sexp_of_t HeapElt.sexp_of_t possible_neighbours_min_queue);
   let selected_neighbours = Neighbours.create () in
   if Heap.length possible_neighbours_min_queue <= num_neighbours then begin
     (* shortcut: if we already have the right number of neighbours, just return them *)
@@ -294,49 +316,61 @@ let insert (hgraph : _ Hgraph.t) (target : 'a)
     ~(num_nodes_search_construction : int) (*  efConstruction  *)
     (level_mult : float)
     (visited : Visited.t) =
-  Visited.clear visited;
-  let level = Int.of_float @@ Float.round_nearest @@ -. (Float.log (Random.float 1.)) *. level_mult in
-  printf "inserting on level %d\n%!" level;
-  
-  let node = ref @@ Hgraph.entry_point hgraph in
-  for layer = Hgraph.max_layer hgraph downto level+1 do
-    node := search_one (Hgraph.layer hgraph layer) hgraph.distance hgraph.value visited !node target
-  done;
-
-  let min_queue_of_neighbours node neighbours =
-    let neighbour_queue =
-      Heap.create ~min_size:(Neighbours.length neighbours) ~cmp:HeapElt.compare_nearest ()
-    in
-    Neighbours.iter neighbours ~f:(fun neighbour ->
-        Heap.add neighbour_queue (HeapElt.create hgraph.distance hgraph.value (hgraph.value node) neighbour));
-    neighbour_queue
-  in
-
-  let w_queue = ref @@ Heap.create ~min_size:num_nodes_search_construction ~cmp:HeapElt.compare_nearest () in
   let new_node = Hgraph.add_node hgraph in
 
-  for layer = Int.min level (Hgraph.max_layer hgraph) downto 0 do
-    let graph = (Hgraph.layer hgraph layer) in
-    w_queue :=
-      search_k graph hgraph.distance hgraph.value visited !w_queue target num_nodes_search_construction;
-    let num_connections = if layer = 0 then 2 * num_connections else num_connections in
-    let neighbours = select_neighbours graph hgraph.distance hgraph.value !w_queue num_connections in
-    Graph.set_connections graph new_node neighbours;
-    Neighbours.iter neighbours ~f:(fun neighbour ->
-        let nn = Graph.adjacent graph neighbour in
-        if Neighbours.length nn > num_connections then begin
-          let neighbour_queue = min_queue_of_neighbours neighbour nn in
-          let reduced_neighbours =
-            select_neighbours graph hgraph.distance hgraph.value neighbour_queue num_connections
-          in
-          Graph.set_connections graph neighbour reduced_neighbours
-        end);
-  done;
+  if Hgraph.entry_point hgraph < 0 then begin
+    (* XXX putting this here to fix init problem (first node added), not
+       sure this is is right *)
+    Hgraph.set_entry_point hgraph new_node;
+    Hgraph.set_max_layer hgraph 0
+  end else begin
+    Visited.clear visited;
+    let level = Int.of_float @@ Float.round_nearest @@ -. (Float.log (Random.float 1.)) *. level_mult in
+    printf "inserting from level %d\n%!" level;
 
-  if level > Hgraph.max_layer hgraph then begin
-    Hgraph.set_max_layer hgraph level;
-    Hgraph.set_entry_point hgraph new_node
-  end;;
+    let node = ref @@ Hgraph.entry_point hgraph in
+    for layer = Hgraph.max_layer hgraph downto level+1 do
+      node := search_one (Hgraph.layer hgraph layer) hgraph.distance hgraph.value visited !node target;
+      printf "after search in layer %d, nearest node is %d\n%!"
+        layer !node;
+    done;
+
+    let min_queue_of_neighbours node neighbours =
+      let neighbour_queue =
+        Heap.create ~min_size:(Neighbours.length neighbours) ~cmp:HeapElt.compare_nearest ()
+      in
+      Neighbours.iter neighbours ~f:(fun neighbour ->
+          Heap.add neighbour_queue (HeapElt.create hgraph.distance hgraph.value (hgraph.value node) neighbour));
+      neighbour_queue
+    in
+
+    let w_queue = ref @@ Heap.create ~min_size:num_nodes_search_construction ~cmp:HeapElt.compare_nearest () in
+    Heap.add !w_queue (HeapElt.create hgraph.distance hgraph.value target !node);
+
+    for layer = Int.min level (Hgraph.max_layer hgraph) downto 0 do
+      printf "-> inserting on layer %d\n%!" layer;
+      let graph = (Hgraph.layer hgraph layer) in
+      w_queue :=
+        search_k graph hgraph.distance hgraph.value visited !w_queue target num_nodes_search_construction;
+      let num_connections = if layer = 0 then 2 * num_connections else num_connections in
+      let neighbours = select_neighbours graph hgraph.distance hgraph.value !w_queue num_connections in
+      Graph.set_connections graph new_node neighbours;
+      Neighbours.iter neighbours ~f:(fun neighbour ->
+          let nn = Graph.adjacent graph neighbour in
+          if Neighbours.length nn > num_connections then begin
+            let neighbour_queue = min_queue_of_neighbours neighbour nn in
+            let reduced_neighbours =
+              select_neighbours graph hgraph.distance hgraph.value neighbour_queue num_connections
+            in
+            Graph.set_connections graph neighbour reduced_neighbours
+          end);
+    done;
+
+    if level > Hgraph.max_layer hgraph then begin
+      Hgraph.set_max_layer hgraph level;
+      Hgraph.set_entry_point hgraph new_node
+    end
+  end
 
 
 let build_batch_bigarray (distance : 'a distance) (batch : Lacaml.S.mat)
