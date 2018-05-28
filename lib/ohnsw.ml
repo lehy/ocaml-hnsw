@@ -63,23 +63,25 @@ module Vector = struct
     v.buf.(v.size) <- x;
     v.size <- v.size + 1
 
-  let%test _ = length (create 0) = 0
-  let%test _ = length (create_with ~capacity:56 0) = 0
-  let%test _ = capacity (create_with ~capacity:56 0) = 56
-  let%test _ = let a = create 0 in push_back a 42; length a = 1
-  let%test _ =
-    let a = create_with ~capacity:1 0 in
-    push_back a 1; push_back a 2; push_back a 3;
-    fold a ~init:0 ~f:(+) = 6
-  let%test _ =
-    let a = create_with ~capacity:1 0 in
-    push_back a 1; push_back a 2; push_back a 3;
-    get a 2 = 3 && get a 0 = 1
-  let%test _ =
-    let a = create_with ~capacity:2 0 in
-    push_back a 1; push_back a 2; push_back a 3;
-    set a 1 42;
-    get a 2 = 3 && get a 0 = 1 && get a 1 = 42
+  module Test = struct
+    let%test _ = length (create 0) = 0
+    let%test _ = length (create_with ~capacity:56 0) = 0
+    let%test _ = capacity (create_with ~capacity:56 0) = 56
+    let%test _ = let a = create 0 in push_back a 42; length a = 1
+    let%test _ =
+      let a = create_with ~capacity:1 0 in
+      push_back a 1; push_back a 2; push_back a 3;
+      fold a ~init:0 ~f:(+) = 6
+    let%test _ =
+      let a = create_with ~capacity:1 0 in
+      push_back a 1; push_back a 2; push_back a 3;
+      get a 2 = 3 && get a 0 = 1
+    let%test _ =
+      let a = create_with ~capacity:2 0 in
+      push_back a 1; push_back a 2; push_back a 3;
+      set a 1 42;
+      get a 2 = 3 && get a 0 = 1 && get a 1 = 42
+  end
 end
 
 module Neighbours = struct
@@ -108,6 +110,25 @@ module Neighbours = struct
     dba, dab
 
   let is_empty n = n.length = 0
+
+  module Test = struct
+    let mem n a = List.mem n.list a ~equal:Int.equal
+    let of_list list = { list; length=List.length list }
+    
+    let%test _ = length (create ()) = 0
+    let%test _ = let a = create () in add a 42; add a 53; length a = 2
+    let%test _ = let a = create () in add a 42; add a 53; remove a 42; length a = 1
+    let%test _ = let a = create () in add a 42; add a 53; remove a 47; length a = 2
+    let%test _ = let a = create () in add a 42; add a 53; for_all a ~f:(fun x -> x = 42 || x = 53)
+    let%test _ = let a = create () in add a 42; add a 53; not @@ for_all a ~f:(fun x -> x = 42)
+    let%test _ =
+      let a = create () in
+      add a 42; add a 53;
+      let b = create () in
+      add b 42; add b 57;
+      let dba, dab = diff_both a b in
+      Set.equal dba (Set.of_list (module Int) [57]) && Set.equal dab (Set.of_list (module Int) [53])
+  end
 end
 
 (** An imperative graph. Nodes are identified by consecutive integers
@@ -148,6 +169,38 @@ module Graph = struct
     Set.iter added_neighbours 
       ~f:(fun added_neighbour ->
           Neighbours.add (Vector.get graph added_neighbour) node)
+
+  module Test = struct
+    let has_link g a b =
+      Neighbours.Test.mem (adjacent g a) b
+    
+    let invariant g =
+      let exception Not_symmetric in
+      try
+        iter_neighbours g ~f:(fun node neighbours ->
+            if not @@ Neighbours.for_all neighbours ~f:(fun neighbour ->
+                has_link g neighbour node) then
+              raise Not_symmetric);
+        true
+      with Not_symmetric -> false
+
+    let%test _ = num_nodes (empty ()) = 0
+    let%test _ = num_nodes (create 42) = 42
+    let%test _ = let g = create 42 in add_node g; num_nodes g = 43
+    let%test _ = invariant (empty ())
+    let%test _ = invariant (create 53)
+    let%test _ = let g = create 12 in add_node g; invariant g
+    let%test _ =
+      let g = create 12 in
+      add_node g; set_connections g 1 (Neighbours.Test.of_list [1;2;3;11]);
+      invariant g
+    let%test _ =
+      let g = create 12 in
+      add_node g;
+      set_connections g 1 (Neighbours.Test.of_list [1;2;3;11]);
+      set_connections g 1 (Neighbours.Test.of_list []);
+      invariant g
+  end
 end
 
 module Visited = struct

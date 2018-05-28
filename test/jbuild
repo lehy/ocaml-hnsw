@@ -5,7 +5,7 @@
   (libraries       (hnsw core_kernel stdio lacaml))
   (preprocess (pps (ppx_jane)))))
 
-(alias
- ((name    runtest)
-  (deps    (test.exe))
-  (action  (run ${<}))))
+; (alias
+;  ((name    runtest)
+;   (deps    (test.exe))
+;   (action  (run ${<}))))
