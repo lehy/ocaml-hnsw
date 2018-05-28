@@ -4,8 +4,11 @@ VERSION ?= new
 
 test:
 	jbuilder runtest --force
-	for i in _build/default/test/*.dot; do neato -Tpng -o "$$i".png "$$i"; done
-	display _build/default/test/*.png
+
+test-2d:
+	jbuilder exec test/test.exe --force
+	for i in *.dot; do neato -Tpng -o "$$i".png "$$i"; done
+	display *.png
 
 perf-record:
 	jbuilder build benchmark/benchmark.exe
