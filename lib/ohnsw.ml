@@ -374,7 +374,7 @@ module HeapElt = struct
   let compare_farthest a b = Float.compare b.distance a.distance
 end
 
-let search_one
+let search_one_paper
     (graph : Graph.t) (distance : 'a distance) (value : 'a value)
     (visited : Visited.t) (start_node : int) (target : 'a) =
 
@@ -420,6 +420,29 @@ let search_one
 
   in aux ();;
 
+(* Not following what is in the paper. We don't need a heap.  *)
+let search_one_simple (graph : Graph.t) (distance : 'a distance) (value : 'a value)
+    (visited : Visited.t) (start_node : int) (target : 'a) =
+  let changed = ref true in
+  let best_node = ref start_node in
+  let best_distance = ref (distance (value start_node) target) in
+  while !changed do
+    changed := false;
+    let neighbours = Graph.adjacent graph !best_node in
+    Neighbours.iter neighbours ~f:(fun neighbour ->
+        let d = distance (value neighbour) target in
+        if d < !best_distance then begin
+          best_node := neighbour;
+          best_distance := d;
+          changed := true
+        end)
+  done;
+  !best_node
+
+(* I can't measure a consistent difference between these. Using the
+   simplest one seems reasonable. *)
+let search_one = search_one_simple
+
 module TestSearchOne = struct
   let%test "search_one in unconnected graph" =
     let graph = Graph.create 3 in 
@@ -447,6 +470,8 @@ let search_k
     (graph : Graph.t) (distance : 'a distance) (value : 'a value)
     (visited : Visited.t) (start_nodes : HeapElt.t Heap.t) (target : 'a) (k : int) =
 
+  assert (not @@ Heap.is_empty start_nodes);
+  assert (k > 0);
   let heap_element = HeapElt.create distance value target in
 
   Visited.clear visited;
@@ -459,9 +484,9 @@ let search_k
 
   let rec aux () =
     match Heap.pop visit_me with
-    | None -> nearest
+    | None -> ()
     | Some c ->
-      if c.distance > (Heap.top_exn nearest).distance then nearest
+      if c.distance > (Heap.top_exn nearest).distance then ()
       else begin
         Neighbours.iter (Graph.adjacent graph c.node) ~f:(fun e ->
             if not @@ Visited.mem visited e then begin
@@ -477,8 +502,12 @@ let search_k
       end
 
   in
+  aux ();
+  assert (not @@ Heap.is_empty nearest);
   let ret = Heap.create ~cmp:HeapElt.compare_nearest () in
-  Heap.iter (aux ()) ~f:(Heap.add ret);
+  Heap.iter nearest ~f:(Heap.add ret);
+  (* Format.printf "search_k returns @[%a@]@."
+   *   Sexp.pp_hum @@ [%sexp_of : HeapElt.t Heap.t] ret; *)
   ret;;
 
 module TestSearchK = struct
@@ -659,13 +688,13 @@ let insert (hgraph : _ Hgraph.t) (target : 'a)
   | Some entry_point -> begin
       Visited.clear visited;
       let level = Int.of_float @@ Float.round_nearest @@ -. (Float.log (Random.float 1.)) *. level_mult in
-      printf "inserting from level %d\n%!" level;
+      (* printf "inserting from level %d\n%!" level; *)
 
       let node = ref entry_point in
       for layer = Hgraph.max_layer hgraph downto level+1 do
         node := search_one (Hgraph.layer hgraph layer) hgraph.distance hgraph.value visited !node target;
-        printf "after search in layer %d, nearest node is %d\n%!"
-          layer !node;
+        (* printf "after search in layer %d, nearest node is %d\n%!"
+         *   layer !node; *)
       done;
 
       let min_queue_of_neighbours node neighbours =
@@ -681,12 +710,12 @@ let insert (hgraph : _ Hgraph.t) (target : 'a)
       Heap.add !w_queue (HeapElt.create hgraph.distance hgraph.value target !node);
 
       for layer = Int.min level (Hgraph.max_layer hgraph) downto 0 do
-        printf "-> inserting on layer %d\n%!" layer;
+        (* printf "-> inserting on layer %d\n%!" layer; *)
         let graph = (Hgraph.layer hgraph layer) in
         w_queue :=
           search_k graph hgraph.distance hgraph.value visited !w_queue target num_nodes_search_construction;
         let num_connections = if layer = 0 then 2 * num_connections else num_connections in
-        let neighbours = select_neighbours hgraph.distance hgraph.value !w_queue num_connections in
+        let neighbours = select_neighbours hgraph.distance hgraph.value (Heap.copy !w_queue) num_connections in
         Graph.set_connections graph new_node neighbours;
         Neighbours.iter neighbours ~f:(fun neighbour ->
             let nn = Graph.adjacent graph neighbour in
@@ -712,9 +741,17 @@ let build_batch_bigarray (distance : 'a distance) (batch : Lacaml.S.mat)
   let hgraph = Hgraph.create distance value in
   let level_mult = 1. /. Float.log (Float.of_int num_connections) in
   let visited = Visited.create (Lacaml.S.Mat.dim2 batch) in
-  Lacaml.S.Mat.fold_cols (fun () col ->
-      insert hgraph col ~num_connections ~num_nodes_search_construction level_mult visited
-    ) () batch;
+  let n = Lacaml.S.Mat.dim2 batch in
+  let k_print = n / 100 in
+  let _ = Lacaml.S.Mat.fold_cols (fun i col ->
+      if i % k_print = 0 then begin
+        printf "\r              \r%d/%d %d%%%!" i n
+          (Int.of_float (100. *. Float.of_int i /. Float.of_int n));
+      end;
+      insert hgraph col ~num_connections ~num_nodes_search_construction level_mult visited;
+      i + 1
+    ) 0 batch
+  in
   hgraph;;
 
 let knn (hgraph : _ Hgraph.t) (visited : Visited.t)
@@ -738,7 +775,7 @@ let knn_batch_bigarray (hgraph : _ Hgraph.t) ~k (batch : Lacaml.S.mat) =
   let visited = Visited.create (Graph.num_nodes (Hgraph.layer hgraph 0)) in
   let _ = Lacaml.S.Mat.fold_cols (fun j col ->
       let nearest = knn hgraph visited ~k col in
-      printf "nearest queue: %s\n%!" @@ Sexp.to_string_hum @@ Heap.sexp_of_t HeapElt.sexp_of_t nearest;
+      (* printf "nearest queue: %s\n%!" @@ Sexp.to_string_hum @@ Heap.sexp_of_t HeapElt.sexp_of_t nearest; *)
       let rec aux i = match Heap.pop nearest with
         | None -> ()
         | Some (e : HeapElt.t) ->

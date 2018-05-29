@@ -70,12 +70,13 @@ let show_neighbours hgraph point neighbours filename =
           i+1
         )
      in
-      (* List.iteri neighbours ~f:(fun i (n : 'a Hnsw.value_distance) ->
-       *     let pos = Hgraph.value hgraph n.node in
-       *     pf "\"n%d\" [ pos=\"%f,%f!\" ]\n"
-       *       i pos.{1} pos.{2};
-       *   ); *)
-      pf "}\n")
+     let neighbours = Heap.to_list neighbours in
+     List.iteri neighbours ~f:(fun i n ->
+         let pos = Hgraph.value hgraph n.node in
+         pf "\"n%d\" [ pos=\"%f,%f!\" ]\n"
+           i pos.{1} pos.{2};
+       );
+     pf "}\n")
 
 let random_data dim n =
   Lacaml.S.Mat.random ~range:6. dim n
@@ -111,14 +112,14 @@ let test_data = random_data dim n_test in
 Caml.Format.printf "train data:\n%a\n" Lacaml.S.pp_mat train_data;
 Caml.Format.printf "test data:\n%a\n" Lacaml.S.pp_mat test_data;
 let hgraph = Ohnsw.build_batch_bigarray Ohnsw.distance_l2
-    ~num_connections:5 ~num_nodes_search_construction:20 train_data
+    ~num_connections:3 ~num_nodes_search_construction:20 train_data
 in
 printf "graph:\n%s\n" (Sexp.to_string_hum @@ Ohnsw.Hgraph.sexp_of_t sexp_of_vec hgraph);
 show_hgraph hgraph "hgraph.dot";
 let i = ref 0 in
 Lacaml.S.Mat.fold_cols (fun () point ->
     let visited = Ohnsw.Visited.create (Ohnsw.Graph.num_nodes (Ohnsw.Hgraph.layer hgraph 0)) in
-    let neighbours = Ohnsw.knn hgraph visited point ~k:2 in
+    let neighbours = Ohnsw.knn hgraph visited point ~k:3 in
     Caml.Format.printf "neighbours of %a:\n%s\n"
       Lacaml.S.pp_vec point
       (Sexp.to_string_hum @@ [%sexp_of : Ohnsw.HeapElt.t Heap.t] neighbours);
