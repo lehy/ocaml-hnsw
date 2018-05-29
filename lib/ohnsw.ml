@@ -185,6 +185,15 @@ module Graph = struct
           Neighbours.add (Vector.get graph added_neighbour) node)
 
   module Test = struct
+    let create_loop values =
+      let n = Array.length values in
+      let wrap i = if i < 0 then i+n else if i >= n then i-n else i in
+      let g = create n in
+      for i = 0 to n - 1 do
+        set_connections g i (Neighbours.Test.of_list @@ List.map ~f:wrap [i-1; i+1])
+      done;
+      g
+
     let has_link g a b =
       Neighbours.Test.mem (adjacent g a) b
 
@@ -218,6 +227,10 @@ module Graph = struct
       set_connections g 1 (Neighbours.Test.of_list [1;2;3;11]);
       set_connections g 1 (Neighbours.Test.of_list []);
       invariant g && not @@ has_link g 1 2
+
+    let%test _ =
+      let g = create_loop [|0.; 1.; 2.; 3.; 4.|] in
+      invariant g
   end
 end
 
@@ -417,14 +430,10 @@ module TestSearchOne = struct
     search_one graph distance value visited 1 42. = 1
 
   let%test "search_one in connected graph" =
-    let graph = Graph.create 5 in
-    (* connect nodes in one loop *)
-    Graph.set_connections graph 0 (Neighbours.Test.of_list [1; 4]);
-    Graph.set_connections graph 1 (Neighbours.Test.of_list [0; 2]);
-    Graph.set_connections graph 2 (Neighbours.Test.of_list [1; 3]);
-    Graph.set_connections graph 3 (Neighbours.Test.of_list [2; 4]);
+    let values = [|1.; 2.; 3.; 4.; 5.|] in
+    let graph = Graph.Test.create_loop values in
     let distance = Hgraph.Test.distance in
-    let value = Hgraph.Test.value [|1.; 2.; 3.; 4.; 5.|] in
+    let value = Hgraph.Test.value values in
     let visited = Visited.create (Graph.num_nodes graph) in
     search_one graph distance value visited 1 3.1 = 2 &&
     search_one graph distance value visited 1 ~-.0.5 = 0 &&
@@ -491,15 +500,10 @@ module TestSearchK = struct
     [%expect {| (((node 2)(distance 3))) |}]
 
   let%expect_test "search_k in connected graph" =
-    let graph = Graph.create 5 in 
-    (* connect nodes in one loop *)
-    Graph.set_connections graph 0 (Neighbours.Test.of_list [1; 4]);
-    Graph.set_connections graph 1 (Neighbours.Test.of_list [0; 2]);
-    Graph.set_connections graph 2 (Neighbours.Test.of_list [1; 3]);
-    Graph.set_connections graph 3 (Neighbours.Test.of_list [2; 4]);
-
+    let values = [|0.; 1.; 2.; 3.; 5.|] in
+    let graph = Graph.Test.create_loop values in
     let distance = Hgraph.Test.distance in
-    let value = Hgraph.Test.value [|0.; 1.; 2.; 3.; 5.|] in
+    let value = Hgraph.Test.value values in
     let visited = Visited.create (Graph.num_nodes graph) in
     let init target start_node =
       let h = Heap.create ~cmp:HeapElt.compare_nearest () in
@@ -520,7 +524,7 @@ module TestSearchK = struct
 end
 
 (*  destroys possible_neighbours_min_queue  *)
-let select_neighbours (graph : Graph.t) (distance : 'a distance) (value : 'a value)
+let select_neighbours (distance : 'a distance) (value : 'a value)
     (possible_neighbours_min_queue : HeapElt.t Heap.t) (num_neighbours : int) =
   printf "selecting %d neighbours from %s\n%!"
     num_neighbours (Sexp.to_string_hum @@ Heap.sexp_of_t HeapElt.sexp_of_t possible_neighbours_min_queue);
@@ -539,6 +543,20 @@ let select_neighbours (graph : Graph.t) (distance : 'a distance) (value : 'a val
     in aux ();
   end;
   selected_neighbours;;
+
+module TestSelectNeighbours = struct
+  (* let%expect_test _ =
+   *   let values = [|0.; 1.; 2.; 3.; 4.|] in
+   *   let graph = Graph.Test.create_loop values in
+   *   let distance = Hgraph.Test.distance in
+   *   let value = Hgraph.Test.value values in
+   *   let candidates () =
+   *     let h = Heap.create ~cmp:HeapElt.compare_nearest () in
+   *     Heap.add 
+   *     h
+   *   in
+   *   select_neighbours graph distance value (candidates ()) 1 *)
+end
 
 let insert (hgraph : _ Hgraph.t) (target : 'a)
     ~(num_connections : int) (*  M  *)
@@ -583,14 +601,14 @@ let insert (hgraph : _ Hgraph.t) (target : 'a)
         w_queue :=
           search_k graph hgraph.distance hgraph.value visited !w_queue target num_nodes_search_construction;
         let num_connections = if layer = 0 then 2 * num_connections else num_connections in
-        let neighbours = select_neighbours graph hgraph.distance hgraph.value !w_queue num_connections in
+        let neighbours = select_neighbours hgraph.distance hgraph.value !w_queue num_connections in
         Graph.set_connections graph new_node neighbours;
         Neighbours.iter neighbours ~f:(fun neighbour ->
             let nn = Graph.adjacent graph neighbour in
             if Neighbours.length nn > num_connections then begin
               let neighbour_queue = min_queue_of_neighbours neighbour nn in
               let reduced_neighbours =
-                select_neighbours graph hgraph.distance hgraph.value neighbour_queue num_connections
+                select_neighbours hgraph.distance hgraph.value neighbour_queue num_connections
               in
               Graph.set_connections graph neighbour reduced_neighbours
             end);
@@ -668,4 +686,6 @@ let distance_l2 a b = Float.sqrt @@ Lacaml.S.Vec.ssqr_diff a b
    error-prone to pass the heap that refers to the target, and the
    target again
 
- *)
+   - Have a MinQueue and MaxQueue wrapping Heap? This would ensure the
+   right types are passed.
+  *)
