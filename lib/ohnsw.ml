@@ -128,6 +128,7 @@ module Neighbours = struct
   module Test = struct
     let mem n a = List.mem n.list a ~equal:Int.equal
     let of_list list = { list; length=List.length list }
+    let to_sorted_list n = List.sort n.list ~compare:Int.compare
 
     let%test _ = length (create ()) = 0
     let%test _ = let a = create () in add a 42; add a 53; length a = 2
@@ -526,36 +527,120 @@ end
 (*  destroys possible_neighbours_min_queue  *)
 let select_neighbours (distance : 'a distance) (value : 'a value)
     (possible_neighbours_min_queue : HeapElt.t Heap.t) (num_neighbours : int) =
-  printf "selecting %d neighbours from %s\n%!"
-    num_neighbours (Sexp.to_string_hum @@ Heap.sexp_of_t HeapElt.sexp_of_t possible_neighbours_min_queue);
+  assert (not @@ Heap.is_empty possible_neighbours_min_queue);
+  (* printf "selecting %d neighbours from %s\n%!"
+   *   num_neighbours (Sexp.to_string_hum @@ Heap.sexp_of_t HeapElt.sexp_of_t possible_neighbours_min_queue); *)
   let selected_neighbours = Neighbours.create () in
-  if Heap.length possible_neighbours_min_queue <= num_neighbours then begin
-    (* shortcut: if we already have the right number of neighbours, just return them *)
-    Heap.iter possible_neighbours_min_queue ~f:(fun e -> Neighbours.add selected_neighbours e.node)
-  end else begin let rec aux () =
-                   match Heap.pop possible_neighbours_min_queue with
-                   | None -> ()
-                   | Some e ->
-                     if Neighbours.for_all selected_neighbours
-                         ~f:(fun neighbour -> e.distance < distance (value neighbour) (value e.node)) then
-                       Neighbours.add selected_neighbours e.node;
-                     if Neighbours.length selected_neighbours <= num_neighbours then aux ()
-    in aux ();
-  end;
+  let rec aux () =
+    match Heap.pop possible_neighbours_min_queue with
+    | None -> ()
+    | Some e ->
+      if Neighbours.for_all selected_neighbours
+          ~f:(fun neighbour -> e.distance < distance (value neighbour) (value e.node)) then
+        Neighbours.add selected_neighbours e.node;
+      if Neighbours.length selected_neighbours < num_neighbours then aux ()
+  in
+  aux ();
   selected_neighbours;;
 
 module TestSelectNeighbours = struct
-  (* let%expect_test _ =
-   *   let values = [|0.; 1.; 2.; 3.; 4.|] in
-   *   let graph = Graph.Test.create_loop values in
-   *   let distance = Hgraph.Test.distance in
-   *   let value = Hgraph.Test.value values in
-   *   let candidates () =
-   *     let h = Heap.create ~cmp:HeapElt.compare_nearest () in
-   *     Heap.add 
-   *     h
-   *   in
-   *   select_neighbours graph distance value (candidates ()) 1 *)
+  let%expect_test _ =
+    let values = [|0.; 1.; 2.; 3.; 4.|] in
+    (* let graph = Graph.Test.create_loop values in *)
+    let distance = Hgraph.Test.distance in
+    let value = Hgraph.Test.value values in
+    let candidates target =
+      let element = HeapElt.create distance value in
+      let h = Heap.create ~cmp:HeapElt.compare_nearest () in
+      Heap.add h (element target 0);
+      Heap.add h (element target 1);
+      Heap.add h (element target 3);
+      h
+    in
+    let pr x = printf "%s\n" @@ Sexp.to_string_hum @@ [%sexp_of: int List.t] @@ Neighbours.Test.to_sorted_list x in
+    pr @@ select_neighbours distance value (candidates 1.) 3;
+    [%expect {| (1) |}];
+    pr @@ select_neighbours distance value (candidates 1.) 42;
+    [%expect {| (1) |}];
+    pr @@ select_neighbours distance value (candidates 1.4) 42;
+    [%expect {| (1 3) |}];
+    pr @@ select_neighbours distance value (candidates 0.6) 2;
+    [%expect {| (0 1) |}];
+    pr @@ select_neighbours distance value (candidates 0.6) 1;
+    [%expect {| (1) |}]
+
+  let%expect_test _ =
+    let values = [|0.; 1.; 2.; 3.; 4.|] in
+    (* let graph = Graph.Test.create_loop values in *)
+    let distance = Hgraph.Test.distance in
+    let value = Hgraph.Test.value values in
+    let target = 5. in
+    let candidates list =
+      let element = HeapElt.create distance value in
+      let h = Heap.create ~cmp:HeapElt.compare_nearest () in
+      List.iter list ~f:(fun i -> Heap.add h (element target i));
+      h
+    in
+    let pr x = printf "%s\n" @@ Sexp.to_string_hum @@ [%sexp_of: int List.t] @@ Neighbours.Test.to_sorted_list x in
+    pr @@ select_neighbours distance value (candidates [1;2;3;4]) 1;
+    [%expect {| (4) |}];
+    pr @@ select_neighbours distance value (candidates [1;2;3;4]) 2;
+    [%expect {| (4) |}];
+    pr @@ select_neighbours distance value (candidates [1;2;3;4]) 3;
+    [%expect {| (4) |}];
+    pr @@ select_neighbours distance value (candidates [1;2;3;4]) 4;
+    [%expect {| (4) |}];
+    pr @@ select_neighbours distance value (candidates [1;2;3;4]) 5;
+    [%expect {| (4) |}]
+
+  let%expect_test _ =
+    let values = [|0.; 1.; 2.; 3.; 4.; 7.5|] in
+    (* let graph = Graph.Test.create_loop values in *)
+    let distance = Hgraph.Test.distance in
+    let value = Hgraph.Test.value values in
+    let target = 5. in
+    let candidates list =
+      let element = HeapElt.create distance value in
+      let h = Heap.create ~cmp:HeapElt.compare_nearest () in
+      List.iter list ~f:(fun i -> Heap.add h (element target i));
+      h
+    in
+    let pr x = printf "%s\n" @@ Sexp.to_string_hum @@ [%sexp_of: int List.t] @@ Neighbours.Test.to_sorted_list x in
+    pr @@ select_neighbours distance value (candidates [1;2;3;4;5]) 1;
+    [%expect {| (4) |}];
+    pr @@ select_neighbours distance value (candidates [1;2;3;4;5]) 2;
+    [%expect {| (4 5) |}];
+    pr @@ select_neighbours distance value (candidates [1;2;3;4;5]) 3;
+    [%expect {| (4 5) |}];
+    pr @@ select_neighbours distance value (candidates [1;2;3;4;5]) 4;
+    [%expect {| (4 5) |}];
+    pr @@ select_neighbours distance value (candidates [1;2;3;4;5]) 5;
+    [%expect {| (4 5) |}]
+
+  let%expect_test _ =
+    let values = [|0.; 1.; 2.; 3.; 4.; 7.5; 10.|] in
+    (* let graph = Graph.Test.create_loop values in *)
+    let distance = Hgraph.Test.distance in
+    let value = Hgraph.Test.value values in
+    let target = 5. in
+    let candidates list =
+      let element = HeapElt.create distance value in
+      let h = Heap.create ~cmp:HeapElt.compare_nearest () in
+      List.iter list ~f:(fun i -> Heap.add h (element target i));
+      h
+    in
+    let pr x = printf "%s\n" @@ Sexp.to_string_hum @@ [%sexp_of: int List.t] @@ Neighbours.Test.to_sorted_list x in
+    pr @@ select_neighbours distance value (candidates [1;2;3;4;5;6]) 1;
+    [%expect {| (4) |}];
+    pr @@ select_neighbours distance value (candidates [1;2;3;4;5;6]) 2;
+    [%expect {| (4 5) |}];
+    pr @@ select_neighbours distance value (candidates [1;2;3;4;5;6]) 3;
+    [%expect {| (4 5) |}];
+    pr @@ select_neighbours distance value (candidates [1;2;3;4;5;6]) 4;
+    [%expect {| (4 5) |}];
+    pr @@ select_neighbours distance value (candidates [1;2;3;4;5;6]) 5;
+    [%expect {| (4 5) |}]
+
 end
 
 let insert (hgraph : _ Hgraph.t) (target : 'a)
@@ -688,4 +773,4 @@ let distance_l2 a b = Float.sqrt @@ Lacaml.S.Vec.ssqr_diff a b
 
    - Have a MinQueue and MaxQueue wrapping Heap? This would ensure the
    right types are passed.
-  *)
+*)
