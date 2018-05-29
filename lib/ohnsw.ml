@@ -447,8 +447,6 @@ let knn (hgraph : _ Hgraph.t) (visited : Visited.t)
   Heap.add w_queue (HeapElt.create hgraph.distance hgraph.value target !node);
   search_k (Hgraph.layer hgraph 0) hgraph.distance hgraph.value visited w_queue target k
 
-(* XXX TODO make hgraph remember value instead of repassing the
-   training batch each time *)
 let knn_batch_bigarray (hgraph : _ Hgraph.t) ~k (batch : Lacaml.S.mat) =
   let size_batch = Lacaml.S.Mat.dim2 batch in
   let distances = Lacaml.S.Mat.create k size_batch in
