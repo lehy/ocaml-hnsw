@@ -208,7 +208,7 @@ module Visited = struct
   let create n = { visited = Array.create ~len:n 0; epoch = 1 }
   let mem visited node = visited.visited.(node) >= visited.epoch
   let add visited node = visited.visited.(node) <- visited.epoch
-  let card a = Array.fold a.visited ~init:0 ~f:(fun acc e -> if mem a e then acc+1 else acc)
+  let card a = Array.fold a.visited ~init:0 ~f:(fun acc e -> if e >= a.epoch then acc+1 else acc)
   let clear (visited : t) =
     if visited.epoch < Int.max_value - 1 then 
       visited.epoch <- visited.epoch + 1
@@ -216,6 +216,30 @@ module Visited = struct
       Array.fill visited.visited ~pos:0 ~len:(Array.length visited.visited) 0;
       visited.epoch <- 1
     end
+
+  module Test = struct
+    let%test _ = let v = create 3 in not (mem v 0) && not (mem v 1) && not (mem v 2)
+    let%test _ = let v = create 3 in
+      try
+        let _ = mem v 3 in false
+      with _ -> true
+    let%test _ = let v = create 3 in add v 1; not (mem v 0) && mem v 1 && not (mem v 2)
+    let%test _ = let v = create 3 in add v 1; add v 1;
+      not (mem v 0) && mem v 1 && not (mem v 2) && card v = 1
+    let%test _ = let v = create 3 in add v 1; clear v;
+      not (mem v 0) && not (mem v 1) && not (mem v 2) && card v = 0
+    let%test _ = let v = create 3 in
+      v.epoch <- Int.max_value - 10;
+      for i = 0 to 15 do
+        add v 1;
+        clear v;
+        assert (not (mem v 1) && card v = 0);
+        add v 1;
+        clear v;
+        assert (not (mem v 1) && card v = 0)
+      done;
+      true
+  end
 end
 
 type 'a distance = 'a -> 'a -> float [@@deriving sexp]
