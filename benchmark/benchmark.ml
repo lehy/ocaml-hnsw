@@ -115,16 +115,18 @@ let test (data : Dataset.t) hgraph =
 
 let main () =
   (* let data = read_data ~limit_train:10000 ~limit_test:10 () in *)
-  let data = random_data ~num_train:10000 ~num_test:10 ~dim:784 ~k:10 in
+  let data = random_data ~num_train:5000 ~num_test:10 ~dim:784 ~k:10 in
+  (* let data = random_data ~num_train:10000 ~num_test:1000 ~dim:2 ~k:100 in *)
   let index_only = Array.length Caml.Sys.argv > 2 in
   match Caml.Sys.argv.(1) with
   | "old" ->
-    let hgraph = build_index data ~num_neighbours:7 ~num_neighbours_build:100 in
+    let hgraph = build_index data ~num_neighbours:15 ~num_neighbours_build:400 in
     if not index_only then test data hgraph
   | "new" ->
-    let hgraph = build_index_new data ~num_neighbours:7 ~num_neighbours_build:100 in
+    let hgraph = build_index_new data ~num_neighbours:15 ~num_neighbours_build:400 in
     if not index_only then test_new data hgraph
-  | _ -> failwith "usage: benchmark old|new [index]";;
+  | _ -> failwith "usage: benchmark old|new [index]"
+  | exception _ -> failwith "usage: benchmark old|new [index]";;
 
 main ();;
 

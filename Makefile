@@ -17,4 +17,7 @@ perf-record:
 perf-report:
 	perf report --hierarchy
 
-.PHONY: test perf-record perf-report
+download-data:
+	cd data && wget 'http://vectors.erikbern.com/fashion-mnist-784-euclidean.hdf5'
+
+.PHONY: test test-2d perf-record perf-report download-data

@@ -1,0 +1,11 @@
+(jbuild_version 1)
+
+(executable
+ ((name            bench_dist)
+  (libraries       (hnsw base stdio))
+  (preprocess (pps (ppx_jane)))))
+
+; (alias
+;  ((name    runtest)
+;   (deps    (bench_dist.exe))
+;   (action  (run ${<}))))
