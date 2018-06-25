@@ -106,8 +106,8 @@ end;;
 module Recall = struct
   (*  XXX check computation  *)
   let compute ?(epsilon=1e-8) expected got =
-    Caml.Format.printf "recall: expected:@,  @[%a@]@." Lacaml.S.pp_mat expected;
-    Caml.Format.printf "recall: got:@,  @[%a@]@." Lacaml.S.pp_mat got;
+    (* Caml.Format.printf "recall: expected:@,  @[%a@]@." Lacaml.S.pp_mat expected;
+     * Caml.Format.printf "recall: got:@,  @[%a@]@." Lacaml.S.pp_mat got; *)
     let module A = Bigarray.Array2 in
     if A.dim1 expected <> A.dim1 got || A.dim2 expected <> A.dim2 got then
       invalid_arg "Recall.compute: arrrays have unequal shapes";
