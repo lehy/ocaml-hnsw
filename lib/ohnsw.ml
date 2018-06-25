@@ -497,8 +497,8 @@ let search_k
     (graph : Graph.t) (distance : 'a distance) (value : 'a value)
     (visited : Visited.t) (start_nodes : HeapElt.t Heap.t) (target : 'a) (k : int) =
 
-  assert (not @@ Heap.is_empty start_nodes);
-  assert (k > 0);
+  (* assert (not @@ Heap.is_empty start_nodes);
+   * assert (k > 0); *)
   let heap_element = HeapElt.create distance value target in
 
   Visited.clear visited;
@@ -530,7 +530,7 @@ let search_k
 
   in
   aux ();
-  assert (not @@ Heap.is_empty nearest);
+  (* assert (not @@ Heap.is_empty nearest); *)
   let ret = Heap.create ~cmp:HeapElt.compare_nearest () in
   Heap.iter nearest ~f:(Heap.add ret);
   (* Format.printf "search_k returns @[%a@]@."
@@ -582,8 +582,8 @@ end
 
 (*  destroys possible_neighbours_min_queue  *)
 let select_neighbours (distance : 'a distance) (value : 'a value)
-    (possible_neighbours_min_queue : HeapElt.t Heap.t) (num_neighbours : int) =
-  assert (not @@ Heap.is_empty possible_neighbours_min_queue);
+    (possible_neighbours_min_queue : MinQueue.t) (num_neighbours : int) =
+  (* assert (not @@ Heap.is_empty possible_neighbours_min_queue); *)
   (* printf "selecting %d neighbours from %s\n%!"
    *   num_neighbours (Sexp.to_string_hum @@ Heap.sexp_of_t HeapElt.sexp_of_t possible_neighbours_min_queue); *)
   let selected_neighbours = Neighbours.create () in
