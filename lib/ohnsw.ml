@@ -580,6 +580,15 @@ module TestSearchK = struct
        ((node 3) (distance 3)) ((node 4) (distance 5))) |}]
 end
 
+module MinQueue = struct
+  type t = HeapElt.t Heap.t
+  let pop_min (q : t) = Heap.pop q
+end
+
+module MaxQueue = struct
+  type t = HeapElt.t Heap.t
+end
+
 (*  destroys possible_neighbours_min_queue  *)
 let select_neighbours (distance : 'a distance) (value : 'a value)
     (possible_neighbours_min_queue : MinQueue.t) (num_neighbours : int) =
@@ -588,7 +597,7 @@ let select_neighbours (distance : 'a distance) (value : 'a value)
    *   num_neighbours (Sexp.to_string_hum @@ Heap.sexp_of_t HeapElt.sexp_of_t possible_neighbours_min_queue); *)
   let selected_neighbours = Neighbours.create () in
   let rec aux () =
-    match Heap.pop possible_neighbours_min_queue with
+    match MinQueue.pop_min possible_neighbours_min_queue with
     | None -> ()
     | Some e ->
       if Neighbours.for_all selected_neighbours
