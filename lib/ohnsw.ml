@@ -185,6 +185,12 @@ module Graph = struct
       ~f:(fun added_neighbour ->
           Neighbours.add (Vector.get graph added_neighbour) node)
 
+  let set_connections_for_new_node (graph : t) (node : int) (neighbours : Neighbours.t) =
+    Vector.set graph node neighbours;
+    Neighbours.iter neighbours 
+      ~f:(fun added_neighbour ->
+          Neighbours.add (Vector.get graph added_neighbour) node)
+  
   module Test = struct
     let create_loop values =
       let n = Array.length values in
@@ -737,7 +743,7 @@ let insert (hgraph : _ Hgraph.t) (target : 'a)
           search_k graph hgraph.distance hgraph.value visited !w_queue target num_nodes_search_construction;
         let num_connections = if layer = 0 then 2 * num_connections else num_connections in
         let neighbours = select_neighbours hgraph.distance hgraph.value (Heap.copy !w_queue) num_connections in
-        Graph.set_connections graph new_node neighbours;
+        Graph.set_connections_for_new_node graph new_node neighbours;
         Neighbours.iter neighbours ~f:(fun neighbour ->
             let nn = Graph.adjacent graph neighbour in
             if Neighbours.length nn > num_connections then begin
