@@ -766,7 +766,8 @@ let insert (hgraph : _ Hgraph.t) (target : 'a)
 
       if level > Hgraph.max_layer hgraph then begin
         Hgraph.set_max_layer hgraph level;
-        Hgraph.set_entry_point hgraph new_node
+        Hgraph.set_entry_point hgraph new_node;
+        Format.printf "moved level up to %d\n%!" level;
       end
     end
 
