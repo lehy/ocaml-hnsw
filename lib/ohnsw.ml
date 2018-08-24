@@ -16,7 +16,7 @@ module Vector = struct
 
   let extend_to_ v ~new_capacity =
     let new_buf = Array.create ~len:new_capacity v.empty_element in
-    Array.blit v.buf 0 new_buf 0 (Array.length v.buf);
+    Array.blit ~src:v.buf ~src_pos:0 ~dst:new_buf ~dst_pos:0 ~len:(Array.length v.buf);
     v.buf <- new_buf
 
   let extend_ v =
@@ -154,7 +154,7 @@ module Graph = struct
   type t = Neighbours.t Vector.t [@@deriving sexp]
   let empty : unit -> t = fun () -> Vector.create (Neighbours.create ())
   let create n =
-    Vector.init n ~f:(fun i -> Neighbours.create ()) (Neighbours.create ())
+    Vector.init n ~f:(fun _ -> Neighbours.create ()) (Neighbours.create ())
 
   let num_nodes (g : t) = Vector.length g
 
@@ -274,7 +274,7 @@ module Visited = struct
       not (mem v 0) && not (mem v 1) && not (mem v 2) && card v = 0
     let%test _ = let v = create 3 in
       v.epoch <- Int.max_value - 10;
-      for i = 0 to 15 do
+      for _i = 0 to 15 do
         add v 1;
         clear v;
         assert (not (mem v 1) && card v = 0);
@@ -339,7 +339,7 @@ module Hgraph = struct
   let max_layer h = Vector.length h.layers - 1
   let set_max_layer h n =
     let num_nodes = Graph.num_nodes @@ Vector.get h.layers (Vector.length h.layers - 1) in
-    for i = (max_layer h + 1) to n do
+    for _i = (max_layer h + 1) to n do
       Vector.push_back h.layers (Graph.create num_nodes)
     done
 
@@ -401,19 +401,60 @@ module HeapElt = struct
   let compare_farthest a b = Float.compare b.distance a.distance
 end
 
+module MinQueue : sig
+  type 'a t
+  type element = HeapElt.t
+  val sexp_of_t : ('a -> Sexp.t) -> 'a t -> Sexp.t
+  val create : 'a distance -> 'a value -> 'a -> 'a t
+  val copy : 'a t -> 'a t
+  val pop_min : 'a t -> HeapElt.t option
+  val add_node : 'a t -> int -> unit
+  val add : 'a t -> element -> unit
+  val element : 'a t -> int -> element
+  val iter : 'a t -> f:(element -> unit) -> unit
+  val clear : 'a t -> unit
+end = struct
+  type 'a t =
+    { heap: HeapElt.t Heap.t; distance : 'a distance; value: 'a value; target: 'a }
+
+  let sexp_of_t _ q = [%sexp_of : HeapElt.t Heap.t] q.heap
+  
+  type element = HeapElt.t
+  let create distance value target =
+    { heap=Heap.create ~cmp:HeapElt.compare_nearest ();
+      distance; value; target }
+  let copy h = { h with heap=Heap.copy h.heap }
+  let pop_min (q : 'a t) = Heap.pop q.heap
+  let element q i = HeapElt.create q.distance q.value q.target i
+  let add q elt = Heap.add q.heap elt
+  let add_node q i = add q (element q i)
+  let iter q ~f = Heap.iter q.heap ~f
+  let clear q =
+    (*  a pity!  *)
+    let rec aux h =
+      match Heap.pop h with
+      | Some _ -> aux h
+      | None -> ()
+    in aux q.heap
+end
+
+module MaxQueue = struct
+  type t = HeapElt.t Heap.t
+end
+
 let search_one_paper
     (graph : Graph.t) (distance : 'a distance) (value : 'a value)
     (visited : Visited.t) (start_node : int) (target : 'a) =
 
-  let heap_element = HeapElt.create distance value target in
+  (* let heap_element = HeapElt.create distance value target in *)
 
   Visited.clear visited;
   Visited.add visited start_node;
 
-  let visit_me = Heap.create ~cmp:HeapElt.compare_nearest () in
-  Heap.add visit_me (heap_element start_node);
+  let visit_me = MinQueue.create distance value target (* Heap.create ~cmp:HeapElt.compare_nearest () *) in
+  MinQueue.add_node visit_me start_node;
 
-  let nearest = ref (heap_element start_node) in
+  let nearest = ref (MinQueue.element visit_me start_node) in
 
   (* Format.printf "search_one on graph: @[%a@]@."
    *   Sexp.pp_hum ([%sexp_of : Graph.t] graph); *)
@@ -423,7 +464,7 @@ let search_one_paper
      *   Sexp.pp_hum ([%sexp_of : HeapElt.t Heap.t] visit_me)
      *   Sexp.pp_hum ([%sexp_of : Visited.t] visited)
      *   Sexp.pp_hum ([%sexp_of : HeapElt.t] !nearest); *)
-    match Heap.pop visit_me with
+    match MinQueue.pop_min visit_me with
     | None -> !nearest.node
     | Some c ->
       (* Format.printf "  popped %a@."
@@ -436,9 +477,9 @@ let search_one_paper
             (* Format.printf "  neighbour: %d@." e; *)
             if not @@ Visited.mem visited e then begin
               Visited.add visited e;
-              let e = heap_element e in
+              let e = MinQueue.element visit_me e in
               if e.distance < !nearest.distance then begin
-                Heap.add visit_me e;
+                MinQueue.add visit_me e;
                 nearest := e
               end
             end);
@@ -449,7 +490,7 @@ let search_one_paper
 
 (* Not following what is in the paper. We don't need a heap.  *)
 let search_one_simple (graph : Graph.t) (distance : 'a distance) (value : 'a value)
-    (visited : Visited.t) (start_node : int) (target : 'a) =
+    (_visited : Visited.t) (start_node : int) (target : 'a) =
   let changed = ref true in
   let best_node = ref start_node in
   let best_distance = ref (distance (value start_node) target) in
@@ -492,37 +533,48 @@ module TestSearchOne = struct
     search_one graph distance value visited 1 1.6 = 1
 end
 
+(*  Did not find a Heap.clear :(  *)
+let rec clear_heap h =
+  match Heap.pop h with
+  | Some _ -> clear_heap h
+  | None -> ()
+
 (* destroys start_nodes (uses it as visit_me set) *)
 let search_k
-    (graph : Graph.t) (distance : 'a distance) (value : 'a value)
-    (visited : Visited.t) (start_nodes : HeapElt.t Heap.t) (target : 'a) (k : int) =
+    (graph : Graph.t)
+    (visited : Visited.t) (start_nodes : 'a MinQueue.t) (k : int)
+    (nearest_maxq : HeapElt.t Heap.t)
+    (result_minq : 'a MinQueue.t) =
 
   (* assert (not @@ Heap.is_empty start_nodes);
    * assert (k > 0); *)
-  let heap_element = HeapElt.create distance value target in
+  (* let heap_element = HeapElt.create distance value target in *)
 
   Visited.clear visited;
-  Heap.iter start_nodes ~f:(fun e -> Visited.add visited e.node);
+  clear_heap nearest_maxq;
+  MinQueue.iter start_nodes ~f:(fun e ->
+      Visited.add visited e.node;
+      Heap.add nearest_maxq e);
 
   let visit_me = start_nodes in
 
-  let nearest = Heap.create ~cmp:HeapElt.compare_farthest () in
-  Heap.iter start_nodes ~f:(fun e -> Heap.add nearest e);
+  (* let nearest = Heap.create ~cmp:HeapElt.compare_farthest () in *)
+  (* Heap.iter start_nodes ~f:(fun e -> ); *)
 
   let rec aux () =
-    match Heap.pop visit_me with
+    match MinQueue.pop_min visit_me with
     | None -> ()
     | Some c ->
-      if c.distance > (Heap.top_exn nearest).distance then ()
+      if c.distance > (Heap.top_exn nearest_maxq).distance then ()
       else begin
         Neighbours.iter (Graph.adjacent graph c.node) ~f:(fun e ->
             if not @@ Visited.mem visited e then begin
               Visited.add visited e;
-              let e = heap_element e in
-              if Heap.length nearest < k || e.distance < (Heap.top_exn nearest).distance then begin
-                Heap.add visit_me e;
-                Heap.add nearest e;
-                if Heap.length nearest > k then ignore (Heap.pop_exn nearest)
+              let e = MinQueue.element visit_me e in
+              if Heap.length nearest_maxq < k || e.distance < (Heap.top_exn nearest_maxq).distance then begin
+                MinQueue.add visit_me e;
+                Heap.add nearest_maxq e;
+                if Heap.length nearest_maxq > k then ignore (Heap.pop_exn nearest_maxq)
               end
             end);
         aux ()
@@ -531,11 +583,13 @@ let search_k
   in
   aux ();
   (* assert (not @@ Heap.is_empty nearest); *)
-  let ret = Heap.create ~cmp:HeapElt.compare_nearest () in
-  Heap.iter nearest ~f:(Heap.add ret);
+  (* let ret = Heap.create ~cmp:HeapElt.compare_nearest () in *)
+  MinQueue.clear result_minq;
+  Heap.iter nearest_maxq ~f:(MinQueue.add result_minq);
+  result_minq;;
   (* Format.printf "search_k returns @[%a@]@."
    *   Sexp.pp_hum @@ [%sexp_of : HeapElt.t Heap.t] ret; *)
-  ret;;
+(* ret;; *)
 
 module TestSearchK = struct
   let%expect_test "search_k in unconnected graph" =
@@ -544,16 +598,21 @@ module TestSearchK = struct
     let value = Hgraph.Test.value [|1.; 2.; 3.|] in
     let visited = Visited.create (Graph.num_nodes graph) in
     let init target start_node =
-      let h = Heap.create ~cmp:HeapElt.compare_nearest () in
-      Heap.add h (HeapElt.create distance value target start_node);
+      let h = MinQueue.create distance value target in
+      MinQueue.add_node h start_node;
       h
     in
-    let pr x = printf "%s\n" @@ Sexp.to_string @@ [%sexp_of: HeapElt.t Heap.t] x in
-    pr @@ search_k graph distance value visited (init 3.1 1) 3.1 2;
+    let pr x = printf "%s\n" @@ Sexp.to_string @@ [%sexp_of: float MinQueue.t] x in
+    let nearest_maxq = Heap.create ~cmp:HeapElt.compare_farthest () in
+    let test target ~start_node ~k =
+      let ret = MinQueue.create distance value target in
+      search_k graph visited (init target start_node) k nearest_maxq ret
+    in
+    pr @@ test 3.1 ~start_node:1 ~k:2;
     [%expect {| (((node 1)(distance 1.1))) |}];
-    pr @@ search_k graph distance value visited (init 3.1 0) 3.1 1;
+    pr @@ test 3.1 ~start_node:0 ~k:1;
     [%expect {| (((node 0)(distance 2.1))) |}];
-    pr @@ search_k graph distance value visited (init 0. 2) 0. 42;
+    pr @@ test 0. ~start_node:2 ~k:42;
     [%expect {| (((node 2)(distance 3))) |}]
 
   let%expect_test "search_k in connected graph" =
@@ -563,35 +622,31 @@ module TestSearchK = struct
     let value = Hgraph.Test.value values in
     let visited = Visited.create (Graph.num_nodes graph) in
     let init target start_node =
-      let h = Heap.create ~cmp:HeapElt.compare_nearest () in
-      Heap.add h (HeapElt.create distance value target start_node);
+      let h = MinQueue.create distance value target in
+      MinQueue.add_node h start_node;
       h
     in
-    let pr x = printf "%s\n" @@ Sexp.to_string_hum @@ [%sexp_of: HeapElt.t Heap.t] x in
-    pr @@ search_k graph distance value visited (init 4.5 1) 4.5 2;
+    let pr x = printf "%s\n" @@ Sexp.to_string_hum @@ [%sexp_of: float MinQueue.t] x in
+    let nearest_maxq = Heap.create ~cmp:HeapElt.compare_farthest () in
+    let test target ~start_node ~k =
+      let ret = MinQueue.create distance value target in
+      search_k graph visited (init target start_node) k nearest_maxq ret
+    in
+    pr @@ test 4.5 ~start_node:1 ~k:2;
     [%expect {| (((node 4) (distance 0.5)) ((node 3) (distance 1.5))) |}];
-    pr @@ search_k graph distance value visited (init 1. 4) 1. 1;
+    pr @@ test 1. ~start_node:4 ~k:1;
     [%expect {| (((node 1) (distance 0))) |}];
-    pr @@ search_k graph distance value visited (init 0. 2) 0. 3;
+    pr @@ test 0. ~start_node:2 ~k:3;
     [%expect {| (((node 0) (distance 0)) ((node 1) (distance 1)) ((node 2) (distance 2))) |}];
-    pr @@ search_k graph distance value visited (init 0. 2) 0. 42;
+    pr @@ test 0. ~start_node:2 ~k:42;
     [%expect {|
       (((node 0) (distance 0)) ((node 1) (distance 1)) ((node 2) (distance 2))
        ((node 3) (distance 3)) ((node 4) (distance 5))) |}]
 end
 
-module MinQueue = struct
-  type t = HeapElt.t Heap.t
-  let pop_min (q : t) = Heap.pop q
-end
-
-module MaxQueue = struct
-  type t = HeapElt.t Heap.t
-end
-
 (*  destroys possible_neighbours_min_queue  *)
 let select_neighbours (distance : 'a distance) (value : 'a value)
-    (possible_neighbours_min_queue : MinQueue.t) (num_neighbours : int) =
+    (possible_neighbours_min_queue : 'a MinQueue.t) (num_neighbours : int) =
   (* assert (not @@ Heap.is_empty possible_neighbours_min_queue); *)
   (* printf "selecting %d neighbours from %s\n%!"
    *   num_neighbours (Sexp.to_string_hum @@ Heap.sexp_of_t HeapElt.sexp_of_t possible_neighbours_min_queue); *)
@@ -615,11 +670,11 @@ module TestSelectNeighbours = struct
     let distance = Hgraph.Test.distance in
     let value = Hgraph.Test.value values in
     let candidates target =
-      let element = HeapElt.create distance value in
-      let h = Heap.create ~cmp:HeapElt.compare_nearest () in
-      Heap.add h (element target 0);
-      Heap.add h (element target 1);
-      Heap.add h (element target 3);
+      (* let element = HeapElt.create distance value in *)
+      let h = MinQueue.create distance value target in
+      MinQueue.add_node h 0;
+      MinQueue.add_node h 1;
+      MinQueue.add h (MinQueue.element h 3);
       h
     in
     let pr x = printf "%s\n" @@ Sexp.to_string_hum @@ [%sexp_of: int List.t] @@ Neighbours.Test.to_sorted_list x in
@@ -641,9 +696,8 @@ module TestSelectNeighbours = struct
     let value = Hgraph.Test.value values in
     let target = 5. in
     let candidates list =
-      let element = HeapElt.create distance value in
-      let h = Heap.create ~cmp:HeapElt.compare_nearest () in
-      List.iter list ~f:(fun i -> Heap.add h (element target i));
+      let h = MinQueue.create distance value target in
+      List.iter list ~f:(fun i -> MinQueue.add_node h i);
       h
     in
     let pr x = printf "%s\n" @@ Sexp.to_string_hum @@ [%sexp_of: int List.t] @@ Neighbours.Test.to_sorted_list x in
@@ -665,9 +719,8 @@ module TestSelectNeighbours = struct
     let value = Hgraph.Test.value values in
     let target = 5. in
     let candidates list =
-      let element = HeapElt.create distance value in
-      let h = Heap.create ~cmp:HeapElt.compare_nearest () in
-      List.iter list ~f:(fun i -> Heap.add h (element target i));
+      let h = MinQueue.create distance value target in
+      List.iter list ~f:(fun i -> MinQueue.add_node h i);
       h
     in
     let pr x = printf "%s\n" @@ Sexp.to_string_hum @@ [%sexp_of: int List.t] @@ Neighbours.Test.to_sorted_list x in
@@ -689,9 +742,8 @@ module TestSelectNeighbours = struct
     let value = Hgraph.Test.value values in
     let target = 5. in
     let candidates list =
-      let element = HeapElt.create distance value in
-      let h = Heap.create ~cmp:HeapElt.compare_nearest () in
-      List.iter list ~f:(fun i -> Heap.add h (element target i));
+      let h = MinQueue.create distance value target in
+      List.iter list ~f:(fun i -> MinQueue.add_node h i);
       h
     in
     let pr x = printf "%s\n" @@ Sexp.to_string_hum @@ [%sexp_of: int List.t] @@ Neighbours.Test.to_sorted_list x in
@@ -735,23 +787,33 @@ let insert (hgraph : _ Hgraph.t) (target : 'a)
 
       let min_queue_of_neighbours node neighbours =
         let neighbour_queue =
-          Heap.create ~min_size:(Neighbours.length neighbours) ~cmp:HeapElt.compare_nearest ()
+          MinQueue.create hgraph.distance hgraph.value (hgraph.value node)
+        (*  TODO: pass on min_size to MinQueue ctor? *)
         in
-        Neighbours.iter neighbours ~f:(fun neighbour ->
-            Heap.add neighbour_queue (HeapElt.create hgraph.distance hgraph.value (hgraph.value node) neighbour));
+        Neighbours.iter neighbours ~f:(MinQueue.add_node neighbour_queue);
         neighbour_queue
       in
 
-      let w_queue = ref @@ Heap.create ~min_size:num_nodes_search_construction ~cmp:HeapElt.compare_nearest () in
-      Heap.add !w_queue (HeapElt.create hgraph.distance hgraph.value target !node);
+      let nearest_maxq = Heap.create ~min_size:num_nodes_search_construction ~cmp:HeapElt.compare_farthest () in
+      let w_queue = ref @@ MinQueue.create hgraph.distance hgraph.value target (* ~min_size:num_nodes_search_construction *) in
+      MinQueue.add_node !w_queue !node;
 
+      let nearest_minq = ref @@ MinQueue.create hgraph.distance hgraph.value target (* ~min_size:num_nodes_search_construction ~cmp:HeapElt.compare_nearest () *) in
+      
       for layer = Int.min level (Hgraph.max_layer hgraph) downto 0 do
         (* printf "-> inserting on layer %d\n%!" layer; *)
         let graph = (Hgraph.layer hgraph layer) in
-        w_queue :=
-          search_k graph hgraph.distance hgraph.value visited !w_queue target num_nodes_search_construction;
+        (* w_queue := *)
+        (*  this consumes w_queue and fills in nearest_minq  *)
+        let _ = search_k graph visited !w_queue
+            num_nodes_search_construction nearest_maxq !nearest_minq in
+        (*  swap w_queue and nearest_minq  *)
+        let backup = !w_queue in
+        w_queue := !nearest_minq;
+        nearest_minq := backup;
+        
         let num_connections = if layer = 0 then 2 * num_connections else num_connections in
-        let neighbours = select_neighbours hgraph.distance hgraph.value (Heap.copy !w_queue) num_connections in
+        let neighbours = select_neighbours hgraph.distance hgraph.value (MinQueue.copy !w_queue) num_connections in
         Graph.set_connections_for_new_node graph new_node neighbours;
         Neighbours.iter neighbours ~f:(fun neighbour ->
             let nn = Graph.adjacent graph neighbour in
@@ -800,20 +862,25 @@ let knn (hgraph : _ Hgraph.t) (visited : Visited.t)
     for layer = Hgraph.max_layer hgraph downto 1 do
       node := search_one (Hgraph.layer hgraph layer) hgraph.distance hgraph.value visited !node target
     done;
-    let w_queue = Heap.create ~min_size:k ~cmp:HeapElt.compare_nearest () in
-    Heap.add w_queue (HeapElt.create hgraph.distance hgraph.value target !node);
-    search_k (Hgraph.layer hgraph 0) hgraph.distance hgraph.value visited w_queue target k
+    let nearest_maxq = Heap.create ~min_size:k ~cmp:HeapElt.compare_farthest () in
+    let result_minq = MinQueue.create hgraph.distance hgraph.value target in
+    let w_queue = MinQueue.create hgraph.distance hgraph.value target in
+    MinQueue.add_node w_queue !node;
+    let _ =
+      search_k (Hgraph.layer hgraph 0) visited w_queue k nearest_maxq result_minq
+    in
+    result_minq
 
 let knn_batch_bigarray (hgraph : _ Hgraph.t) ~k (batch : Lacaml.S.mat) =
   let size_batch = Lacaml.S.Mat.dim2 batch in
   let distances = Lacaml.S.Mat.create k size_batch in
   Lacaml.S.Mat.fill distances Float.nan;
-  let ids = Array.init size_batch ~f:(fun i -> Array.create ~len:k (-1)) in
+  let ids = Array.init size_batch ~f:(fun _i -> Array.create ~len:k (-1)) in
   let visited = Visited.create (Graph.num_nodes (Hgraph.layer hgraph 0)) in
   let _ = Lacaml.S.Mat.fold_cols (fun j col ->
       let nearest = knn hgraph visited ~k col in
       (* printf "nearest queue: %s\n%!" @@ Sexp.to_string_hum @@ Heap.sexp_of_t HeapElt.sexp_of_t nearest; *)
-      let rec aux i = match Heap.pop nearest with
+      let rec aux i = match MinQueue.pop_min nearest with
         | None -> ()
         | Some (e : HeapElt.t) ->
           distances.{i,j} <- e.distance;
