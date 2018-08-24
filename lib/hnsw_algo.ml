@@ -1,5 +1,5 @@
 open Base
-open Stdio (* XXX DEBUG  *)
+(* open! Stdio (\* XXX DEBUG  *\) *)
 (*  https://arxiv.org/abs/1603.09320  *)
 
 let tsh f x = Sexp.to_string_hum (f x)
@@ -42,7 +42,7 @@ module PairingHeap(Element : COMPARABLE) = struct
 
   let remove_top = function
     | Empty -> Empty
-    | Node { node; subheaps } -> merge_pairs subheaps
+    | Node { node=_; subheaps } -> merge_pairs subheaps
 
   let pop_top = function
     | Empty -> None
@@ -103,7 +103,7 @@ module MinHeap(Distance : DISTANCE)(Value : VALUE with type value = Distance.val
   let of_fold target g f =
     f ~init:(create ()) ~f:(fun acc node -> add acc (Element.of_node target g node))
 
-  let of_fold_distance target g f =
+  let of_fold_distance f =
     f ~init:(create ()) ~f:add (* (fun acc node -> add acc (Element.of_node target g node)) *)
 
   let fold_near_to_far_until = fold_top_to_bottom_until
@@ -570,7 +570,7 @@ useful they are.
   *)
 
   let select_neighbours
-      hgraph (g : Graph.t) target
+      (g : Graph.t)
       ~value ~distance ?(do_not_isolate=false)
       (current_neighbour_fold : init:'acc -> f:('acc -> Graph.node value_distance -> 'acc) -> 'acc)
       (num_neighbours : int) : Graph.Neighbours.t =
@@ -634,13 +634,13 @@ module BuildBase
       { node; distance_to_target=Distance.distance (Hgraph.value hgraph node) point }
     in
 
-    let insert_in_layer_no_neighbours hgraph i_layer value =
+    let insert_in_layer_no_neighbours hgraph i_layer =
       (* let hgraph, node = Hgraph.allocate hgraph value in *)
       let hgraph = Hgraph.set_connections hgraph i_layer point_node (Layer.Neighbours.create ()) in
       Hgraph.set_entry_point hgraph point_node
     in
 
-    if Hgraph.is_empty hgraph then insert_in_layer_no_neighbours hgraph 0 point else
+    if Hgraph.is_empty hgraph then insert_in_layer_no_neighbours hgraph 0 else
       (* let hgraph, point_node = Hgraph.allocate hgraph point in *)
       let level = Int.of_float @@ Float.round_nearest @@ -. (Float.log (Random.float 1.)) *. level_mult in
       (* printf "inserting on level %d\n%!" level; *)
@@ -662,10 +662,9 @@ module BuildBase
           (* printf "insert: search in lower layer %d\n%!" i_layer; *)
           let nearest = SearchLayer.search hgraph layer_graph visited start_nodes point num_neighbours_search in
           let neighbours = SelectNeighbours.select_neighbours
-              hgraph
               ~value:(Hgraph.value hgraph)
               ~distance:Distance.distance
-              layer_graph point (Nearest.fold_distance nearest) num_neighbours
+              layer_graph (Nearest.fold_distance nearest) num_neighbours
           in
           let hgraph = Hgraph.set_connections hgraph i_layer point_node neighbours in
           let hgraph = Layer.Neighbours.fold neighbours ~init:hgraph
@@ -678,11 +677,10 @@ module BuildBase
                      batch?  *)
                   if Layer.Neighbours.length connections > max_num_neighbours then begin
                     let new_connections =
-                      SelectNeighbours.select_neighbours hgraph layer_graph
+                      SelectNeighbours.select_neighbours layer_graph
                         ~value:(Hgraph.value hgraph)
                         ~distance:Distance.distance
                         ~do_not_isolate:true
-                        (Hgraph.value hgraph node)
                         (fun ~init ~f ->
                            Layer.Neighbours.fold connections ~init
                              ~f:(fun acc node -> f acc (value_distance node)))
@@ -702,7 +700,7 @@ module BuildBase
         insert_in_lower_layers hgraph layer_level (VisitMe.singleton hgraph point closest_node)
       in
 
-      let hgraph, nearest = search hgraph in
+      let hgraph, _nearest = search hgraph in
       (* We use max_layer/set_max_layer to notice that we have to update
          the entry point. This is not satisfying because the graph could
          manage its max layer by itself, since it knows about it. *)
