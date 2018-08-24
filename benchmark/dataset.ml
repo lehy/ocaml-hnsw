@@ -1,5 +1,4 @@
 open Core_kernel
-open Stdio
 open Hdf5_caml
 
 let () = Random.init 0;;
