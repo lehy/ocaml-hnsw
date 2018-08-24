@@ -3,19 +3,19 @@
 VERSION ?= new
 
 test:
-	jbuilder runtest --force
+	jbuilder runtest --dev --force
 
 test-2d:
-	jbuilder exec test/test.exe --force
+	jbuilder exec --dev test/test.exe --force
 	for i in *.dot; do neato -Tpng -o "$$i".png "$$i"; done
 	display *.png
 
 perf-record:
-	jbuilder build benchmark/benchmark.exe
+	jbuilder build --dev benchmark/benchmark.exe
 	perf record -b --call-graph=dwarf -- _build/default/benchmark/benchmark.exe $(VERSION)
 
 bench:
-	jbuilder build benchmark/benchmark.exe
+	jbuilder build --dev benchmark/benchmark.exe
 	_build/default/benchmark/benchmark.exe $(VERSION)
 
 benchpy:
