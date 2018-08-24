@@ -1,6 +1,5 @@
 open Base
 open Stdio
-open Hdf5_caml
 
 module Recall = Dataset.Recall
 module Dataset = Dataset.Dataset
@@ -88,7 +87,7 @@ let test_new (data : Dataset.t) hgraph =
   let num_neighbours = Bigarray.Array2.dim1 data.test_distances in
   printf "bench: num_neighbours: %d\n" num_neighbours;
   let t1 = Unix.gettimeofday () in
-  let got_ids, got_distances =
+  let _got_ids, got_distances =
     Ohnsw.knn_batch_bigarray hgraph data.test ~k:num_neighbours
   in
   let t2 = Unix.gettimeofday () in
