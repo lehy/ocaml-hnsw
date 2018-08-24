@@ -123,7 +123,7 @@ module MapGraph = struct
   module Visited = VisitedIntArray
   
   (*  XXX TODO: check symmetric  *)
-  let invariant x = true
+  let invariant _x = true
   (* let invariant x = *)
   (*   Map.for_alli x.connections ~f:(fun ~key ~data -> *)
   (*       Map.mem x.values key && Neighbours.for_all data ~f:(Map.mem x.values)) *)
@@ -154,7 +154,7 @@ module MapGraph = struct
     (* assert (invariant g); *)
     (* assert (Neighbours.for_all neighbours ~f:(Map.mem g.values)); *)
     (* assert (Map.mem g.values node); *)
-    let connections = Map.set g.connections node neighbours in
+    let connections = Map.set g.connections ~key:node ~data:neighbours in
     let g =
       { g with connections = Neighbours.fold neighbours ~init:connections
                    ~f:(fun connections neighbour ->
@@ -162,7 +162,7 @@ module MapGraph = struct
                          | None -> Neighbours.singleton node
                          | Some old_neighbours -> Neighbours.add old_neighbours node
                        in
-                       Map.set connections neighbour neighbours_of_neighbour) }
+                       Map.set connections ~key:neighbour ~data:neighbours_of_neighbour) }
     in
     (* assert (invariant g); *)
     g
@@ -234,7 +234,7 @@ module MapGraph = struct
     (* let layer = remove_neighbours layer node removed_neighbours in *)
     let connections = layer.connections in
     (*  1. set the connections for the node  *)
-    let connections = Map.update connections node (function
+    let connections = Map.update connections node ~f:(function
         | None -> neighbours
         | Some _ -> neighbours)
     in
@@ -296,7 +296,7 @@ module MapValues(Value : VALUE) = struct
   let value m k = Map.find_exn m.values k
   let allocate m v =
     let node = m.next_node in
-    let values = Map.set m.values node v in
+    let values = Map.set m.values ~key:node ~data:v in
     {
       values; 
       next_node = m.next_node + 1
@@ -405,7 +405,7 @@ module Hgraph(Values : VALUES)(Distance : DISTANCE) = struct
   let max_layer hgraph = hgraph.max_layer
   let set_max_layer hgraph m =
     { hgraph with max_layer = m;
-                  layers = Map.set hgraph.layers m (layer hgraph m) }
+                  layers = Map.set hgraph.layers ~key:m ~data:(layer hgraph m) }
 
   (* Not well defined when the graph is empty, and no check that the
      entry point is an actual node. However the neighbour sets should
@@ -439,7 +439,7 @@ module Hgraph(Values : VALUES)(Distance : DISTANCE) = struct
 
   let set_connections h i_layer node neighbours =
     let layer = LayerGraph.set_connections (layer h i_layer) node neighbours in
-    { h with layers = Map.set h.layers i_layer layer }
+    { h with layers = Map.set h.layers ~key:i_layer ~data:layer }
 end
 
 module HgraphIncr(Distance : DISTANCE) = struct
