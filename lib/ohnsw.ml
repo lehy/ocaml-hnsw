@@ -1,5 +1,15 @@
 open Core_kernel
 
+type 'a distance = 'a -> 'a -> float [@@deriving sexp]
+type 'a value = int -> 'a [@@deriving sexp]
+
+module HeapElt = struct
+  type t = { node : int; distance : float } [@@deriving sexp]
+  let create (distance : 'a distance) (value : 'a value) (target : 'a) node =
+    { node; distance = distance target (value node) }
+  let compare_nearest a b = Float.compare a.distance b.distance
+  let compare_farthest a b = Float.compare b.distance a.distance
+end
 
 (** A minimal extensible array.  *)
 module Vector = struct
@@ -286,9 +296,6 @@ module Visited = struct
   end
 end
 
-type 'a distance = 'a -> 'a -> float [@@deriving sexp]
-type 'a value = int -> 'a [@@deriving sexp]
-
 (** An imperative stack of graphs (layers).
 
     All layers have the same nodes (which are integers). This also holds
@@ -393,13 +400,6 @@ module Hgraph = struct
   end
 end
 
-module HeapElt = struct
-  type t = { node : int; distance : float } [@@deriving sexp]
-  let create (distance : 'a distance) (value : 'a value) (target : 'a) node =
-    { node; distance = distance target (value node) }
-  let compare_nearest a b = Float.compare a.distance b.distance
-  let compare_farthest a b = Float.compare b.distance a.distance
-end
 
 module MinQueue : sig
   type 'a t
@@ -579,7 +579,6 @@ let search_k
             end);
         aux ()
       end
-
   in
   aux ();
   (* assert (not @@ Heap.is_empty nearest); *)
@@ -700,7 +699,9 @@ module TestSelectNeighbours = struct
       List.iter list ~f:(fun i -> MinQueue.add_node h i);
       h
     in
-    let pr x = printf "%s\n" @@ Sexp.to_string_hum @@ [%sexp_of: int List.t] @@ Neighbours.Test.to_sorted_list x in
+    let pr x =
+      printf "%s\n" @@ Sexp.to_string_hum @@ [%sexp_of: int List.t] @@ Neighbours.Test.to_sorted_list x
+    in
     pr @@ select_neighbours distance value (candidates [1;2;3;4]) 1;
     [%expect {| (4) |}];
     pr @@ select_neighbours distance value (candidates [1;2;3;4]) 2;
@@ -723,7 +724,9 @@ module TestSelectNeighbours = struct
       List.iter list ~f:(fun i -> MinQueue.add_node h i);
       h
     in
-    let pr x = printf "%s\n" @@ Sexp.to_string_hum @@ [%sexp_of: int List.t] @@ Neighbours.Test.to_sorted_list x in
+    let pr x =
+      printf "%s\n" @@ Sexp.to_string_hum @@ [%sexp_of: int List.t] @@ Neighbours.Test.to_sorted_list x
+    in
     pr @@ select_neighbours distance value (candidates [1;2;3;4;5]) 1;
     [%expect {| (4) |}];
     pr @@ select_neighbours distance value (candidates [1;2;3;4;5]) 2;
@@ -841,7 +844,7 @@ let build_batch_bigarray (distance : 'a distance) (batch : Lacaml.S.mat)
   let level_mult = 1. /. Float.log (Float.of_int num_connections) in
   let visited = Visited.create (Lacaml.S.Mat.dim2 batch) in
   let n = Lacaml.S.Mat.dim2 batch in
-  let k_print = n / 100 in
+  let k_print = max 1 (n / 100) in
   let _ = Lacaml.S.Mat.fold_cols (fun i col ->
       if i % k_print = 0 then begin
         printf "\r              \r%d/%d %d%%%!" i n

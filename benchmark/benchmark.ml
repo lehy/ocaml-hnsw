@@ -113,19 +113,21 @@ let test (data : Dataset.t) hgraph =
 
 
 let main () =
+  let num_train = try Int.of_string Sys.argv.(1) with _ -> 5000 in
   (* let data = read_data ~limit_train:10000 ~limit_test:10 () in *)
-  let data = random_data ~num_train:5000 ~num_test:10 ~dim:784 ~k:10 in
+  let data = random_data ~num_train ~num_test:10 ~dim:784 ~k:10 in
   (* let data = random_data ~num_train:10000 ~num_test:1000 ~dim:2 ~k:100 in *)
-  let index_only = Array.length Caml.Sys.argv > 2 in
-  match Caml.Sys.argv.(1) with
-  | "old" ->
-    let hgraph = build_index data ~num_neighbours:15 ~num_neighbours_build:400 in
-    if not index_only then test data hgraph
-  | "new" ->
-    let hgraph = build_index_new data ~num_neighbours:15 ~num_neighbours_build:400 in
-    if not index_only then test_new data hgraph
-  | _ -> failwith "usage: benchmark old|new [index]"
-  | exception _ -> failwith "usage: benchmark old|new [index]";;
+  (* let index_only = Array.length Caml.Sys.argv > 2 in *)
+  (* match Caml.Sys.argv.(1) with
+   * | "old" ->
+   *   let hgraph = build_index data ~num_neighbours:15 ~num_neighbours_build:400 in
+   *   if not index_only then test data hgraph
+   * | "new" -> *)
+  let hgraph = build_index_new data ~num_neighbours:15 ~num_neighbours_build:400 in
+  (* if not index_only then *)
+  test_new data hgraph;;
+(* | _ -> failwith "usage: benchmark old|new [index]"
+ * | exception _ -> failwith "usage: benchmark old|new [index]";; *)
 
 main ();;
 
@@ -138,8 +140,8 @@ main ();;
       - Set.fold -> convert sets to lists?
     + try to benchmark index creation and querying separately
 
-new TODO:
-- l2 distance computation is on par with what C++ does (even a bit better!)
-- simple random tests show that our recall is very weak (like 1/2% even with num neighbours build = 400: investigate
+    new TODO:
+    - l2 distance computation is on par with what C++ does (even a bit better!)
+    - simple random tests show that our recall is very weak (like 1/2% even with num neighbours build = 400: investigate
 
 *)
